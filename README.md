@@ -224,6 +224,8 @@ src/main/java/com/hjp/searchlookup/SearchExample.java
 
 현재 `card-agent-android`는 발표/데모 안정성을 위해 assets 기반으로 구현되어 있습니다.
 
+상세 마일스톤과 타임라인 다이어그램은 [MILESTONE.md](MILESTONE.md)를 참고합니다.
+
 제품화 단계에서는 아래 구조가 더 적합합니다.
 
 ```text
