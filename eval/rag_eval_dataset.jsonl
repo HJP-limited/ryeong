@@ -1,0 +1,5 @@
+{"id":"E001","query":"AI 개발팀 사람 찾아줘","relevant_card_ids":["C002"],"type":"hybrid","required_fields":["cardId","name","company","title","department"]}
+{"id":"E002","query":"투자 미팅에서 만난 대표","relevant_card_ids":["C001"],"type":"semantic","required_fields":["cardId","name","company","memo","tags"]}
+{"id":"E003","query":"코어AI 검색 담당자","relevant_card_ids":["C002"],"type":"keyword","required_fields":["cardId","name","company","title"]}
+{"id":"E004","query":"첫 번째 사람 자세히 보여줘","relevant_card_ids":["C002"],"type":"multi_turn","required_fields":["cardId"]}
+{"id":"E005","query":"C001 상세 조회","relevant_card_ids":["C001"],"type":"lookup","required_fields":["phone","email","address"]}
