@@ -22,3 +22,10 @@ app/src/main/assets/models/*
 !app/src/main/assets/models/.gitkeep
 app/src/main/assets/tokenizer/*
 !app/src/main/assets/tokenizer/.gitkeep
+*.tokenizer
+/tokenizer.json
+/tokenizer.model
+/tokenizer_config.json
+tokenizer.json
+tokenizer.model
+tokenizer_config.json
