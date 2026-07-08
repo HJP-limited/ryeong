@@ -58,8 +58,7 @@ public final class BusinessCard {
 
     public String searchableText() {
         return (name + " " + nameEn + " " + company + " " + title + " " + department + " "
-                + industry + " " + location + " " + phone + " " + email + " " + address + " "
-                + memo + " " + tagLine()).toLowerCase(Locale.KOREAN);
+                + industry + " " + location + " " + memo + " " + tagLine()).toLowerCase(Locale.KOREAN);
     }
 
     public String tagLine() {

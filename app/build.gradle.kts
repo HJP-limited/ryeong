@@ -54,3 +54,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+// Production Android path for on-device EmbeddingGemma ONNX inference.
+// The JVM demo remains dependency-light; actual model assets are ignored by git.
+dependencies {
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+}

@@ -2,6 +2,9 @@ package com.hjp.searchlookup;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.io.File;
+import com.hjp.searchlookup.eval.RagEvaluator;
 
 public final class SearchExample {
     private SearchExample() {
@@ -25,14 +28,11 @@ public final class SearchExample {
 
         SearchLookupService service = new SearchLookupService(cards, new LocalEmbeddingEngine());
 
-        print("Business card tab keyword search", service.searchCardTab("AI 개발", SortOption.RELEVANCE, 5));
-        print("Business card tab latest sort", service.searchCardTab("AI 개발", SortOption.LATEST, 5));
-        print("Business card tab name sort", service.searchCardTab("AI 개발", SortOption.NAME, 5));
-        print("Business card tab company sort", service.searchCardTab("AI 개발", SortOption.COMPANY, 5));
-
+        print("keyword only", service.retrieve("AI 개발팀 사람 찾아줘", 5, RetrievalMode.KEYWORD_ONLY).results);
+        print("semantic only", service.retrieve("AI 개발팀 사람 찾아줘", 5, RetrievalMode.SEMANTIC_ONLY).results);
         AgentSessionState session = new AgentSessionState();
         RetrievalResponse response = service.retrieveForAgent("AI 개발팀 사람 찾아줘", session, 5);
-        print("Agent hybrid retrieval", response.results);
+        print("hybrid retrieval", response.results);
         System.out.println("\nRAG context:\n" + response.ragContext);
 
         String referencedCardId = session.resolveReferencedCardId("첫 번째 사람 자세히 보여줘");
@@ -42,12 +42,17 @@ public final class SearchExample {
         if (detail != null) {
             System.out.printf("%s %s %s %s %s%n", detail.id, detail.name, detail.phone, detail.email, detail.address);
         }
+
+        System.out.println("\nEvaluator (retrieval quality only):");
+        for (Map.Entry<RetrievalMode, RagEvaluator.Metrics> entry : RagEvaluator.evaluateAll(service, RagEvaluator.loadJsonl(new File("eval/rag_eval_dataset.jsonl"))).entrySet()) {
+            System.out.println(entry.getKey() + " " + entry.getValue());
+        }
     }
 
     private static void print(String title, List<SearchResult> results) {
         System.out.println("\n== " + title + " ==");
         for (SearchResult result : results) {
-            System.out.printf("%s %s %s score=%.2f fields=%s%n",
+            System.out.printf("%s %s %s score=%.2f sources=%s%n",
                     result.cardId, result.card.name, result.card.company, result.score, result.matchedFields);
         }
     }

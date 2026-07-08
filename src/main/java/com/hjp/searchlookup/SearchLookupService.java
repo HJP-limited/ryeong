@@ -1,175 +1,41 @@
 package com.hjp.searchlookup;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
-public final class SearchLookupService {
-    private static final float SEMANTIC_THRESHOLD = 0.04f;
-    private static final double SEMANTIC_WEIGHT = 45.0;
+public final class SearchLookupService implements RetrievalService {
+    private static final int RRF_K = 60;
     private static final int RAG_CARD_LIMIT = 5;
-
-    private final List<BusinessCard> cards;
+    private final BusinessCardRepository repository;
     private final EmbeddingEngine embeddingEngine;
-    private final RerankerEngine rerankerEngine;
     private final KeywordCandidateSource keywordCandidateSource;
     private final RagContextBuilder ragContextBuilder = new RagContextBuilder();
     private final LightweightTokenizer tokenizer = new LightweightTokenizer();
-    private final Map<String, BusinessCard> cardsById = new LinkedHashMap<>();
-    private final Map<String, float[]> cardVectors = new HashMap<>();
-    private final Map<String, List<String>> synonyms = new HashMap<>();
 
-    public SearchLookupService(List<BusinessCard> cards, EmbeddingEngine embeddingEngine) {
-        this(cards, embeddingEngine, null, new NoOpRerankerEngine());
+    public SearchLookupService(List<BusinessCard> cards, EmbeddingEngine embeddingEngine) { this(new InMemoryBusinessCardRepository(cards), embeddingEngine); }
+    public SearchLookupService(List<BusinessCard> cards, EmbeddingEngine embeddingEngine, Map<String,float[]> vectors, RerankerEngine unused) { this(cards, embeddingEngine); if(vectors!=null) for(BusinessCard c:cards) repository.upsertEmbedding(new CardEmbedding(c.id,this.embeddingEngine.name(),vectors.get(c.id).length,FloatVectorCodec.toBlob(vectors.get(c.id)),EmbeddingUpdater.sha256(c.searchableText()),System.currentTimeMillis(),System.currentTimeMillis())); }
+    public SearchLookupService(BusinessCardRepository repository, EmbeddingEngine embeddingEngine) { this.repository=repository; this.embeddingEngine=embeddingEngine==null?OnDeviceEmbeddingEngine.production():embeddingEngine; this.keywordCandidateSource=new InMemoryKeywordCandidateSource(repository.getAllCards(), tokenizer); EmbeddingUpdater updater=new EmbeddingUpdater(repository,this.embeddingEngine); for(BusinessCard c:repository.getAllCards()) updater.refreshIfNeeded(c); }
+
+    public List<SearchResult> search(String rawQuery, int limit) { return retrieve(rawQuery, limit).results; }
+    public List<SearchResult> searchCardTab(String rawQuery, SortOption sortOption, int limit) { return limit(keywordOnly(rawQuery, Integer.MAX_VALUE), limit); }
+    public RetrievalResponse retrieveForAgent(String rawQuery, AgentSessionState session, int limit) { RetrievalResponse r=retrieve(rawQuery,limit); (session==null?new AgentSessionState():session).updateLastSearch(r.query,r.results); return r; }
+    @Override public RetrievalResponse retrieve(String rawQuery, int topK) { return retrieve(rawQuery, topK, RetrievalMode.HYBRID); }
+    public RetrievalResponse retrieve(String rawQuery, int topK, RetrievalMode mode) {
+        String query=tokenizer.normalize(rawQuery); int safe=Math.max(1,topK);
+        List<SearchResult> keyword=keywordOnly(query,Integer.MAX_VALUE);
+        List<SearchResult> semantic=semanticOnly(query,Integer.MAX_VALUE);
+        List<SearchResult> fused = mode==RetrievalMode.KEYWORD_ONLY ? keyword : mode==RetrievalMode.SEMANTIC_ONLY ? semantic : fuse(keyword, semantic);
+        fused=rank(limit(fused,safe));
+        String rag=ragContextBuilder.build(query,fused,Math.min(RAG_CARD_LIMIT,safe));
+        boolean fb=embeddingEngine instanceof OnDeviceEmbeddingEngine && ((OnDeviceEmbeddingEngine)embeddingEngine).isFallbackUsed();
+        return new RetrievalResponse(query,fused,rag,mode.name(),embeddingEngine.name(),keyword.size(),semantic.size(),fb);
     }
+    @Override public BusinessCard getCard(String cardId){ return repository.getCard(cardId==null?null:cardId.trim()); }
+    public String engineName(){ return embeddingEngine.name(); }
 
-    public SearchLookupService(List<BusinessCard> cards, EmbeddingEngine embeddingEngine,
-            Map<String, float[]> precomputedCardVectors, RerankerEngine rerankerEngine) {
-        this.cards = Collections.unmodifiableList(new ArrayList<>(cards == null ? Collections.emptyList() : cards));
-        this.embeddingEngine = embeddingEngine == null ? new LocalEmbeddingEngine() : embeddingEngine;
-        this.rerankerEngine = rerankerEngine == null ? new NoOpRerankerEngine() : rerankerEngine;
-        this.keywordCandidateSource = new InMemoryKeywordCandidateSource(this.cards, tokenizer);
-        installSynonyms();
-        Map<String, float[]> vectors = precomputedCardVectors == null ? Collections.emptyMap() : precomputedCardVectors;
-        for (BusinessCard card : this.cards) {
-            cardsById.put(card.id, card);
-            float[] vector = vectors.get(card.id);
-            cardVectors.put(card.id, vector == null ? this.embeddingEngine.embedCard(card) : vector);
-        }
-    }
-
-    public List<SearchResult> search(String rawQuery, int limit) {
-        return retrieveForAgent(rawQuery, new AgentSessionState(), limit).results;
-    }
-
-    public List<SearchResult> searchCardTab(String rawQuery, SortOption sortOption, int limit) {
-        SortOption option = sortOption == null ? SortOption.RELEVANCE : sortOption;
-        List<SearchResult> results = new ArrayList<>(keywordCandidateSource.searchKeyword(rawQuery, Integer.MAX_VALUE));
-        results.sort(comparatorFor(option));
-        return limit(results, limit);
-    }
-
-    public RetrievalResponse retrieveForAgent(String rawQuery, AgentSessionState session, int limit) {
-        String query = tokenizer.normalize(rawQuery);
-        int safeLimit = Math.max(1, limit);
-        Map<String, SearchResult> keywordById = new LinkedHashMap<>();
-        for (SearchResult result : keywordCandidateSource.searchKeyword(query, Integer.MAX_VALUE)) {
-            keywordById.put(result.cardId, result);
-        }
-
-        List<String> expandedTokens = expandTokens(query);
-        float[] queryVector = embeddingEngine.embed(query + " " + join(expandedTokens, " "));
-        List<SearchResult> hybrid = new ArrayList<>();
-
-        for (BusinessCard card : cards) {
-            SearchResult keywordResult = keywordById.get(card.id);
-            double keywordScore = keywordResult == null ? 0.0 : keywordResult.breakdown.keywordScore;
-            Set<String> matchedFields = new LinkedHashSet<>(keywordResult == null ? Collections.emptyList() : keywordResult.matchedFields);
-            double synonymScore = synonymScore(card, query, expandedTokens);
-            if (synonymScore > 0.0) matchedFields.add("synonym");
-            double semanticRaw = semanticScore(queryVector, card);
-            double semanticContribution = semanticRaw > SEMANTIC_THRESHOLD ? semanticRaw * SEMANTIC_WEIGHT : 0.0;
-            if (semanticContribution > 0.0) matchedFields.add("semantic");
-            double finalScore = keywordScore + synonymScore + semanticContribution;
-            if (query.isEmpty()) finalScore = 1.0;
-            if (finalScore > 0.0) {
-                ScoreBreakdown breakdown = new ScoreBreakdown(keywordScore, semanticRaw, synonymScore, 0.0, finalScore);
-                hybrid.add(new SearchResult(card, finalScore, breakdown, new ArrayList<>(matchedFields)));
-            }
-        }
-
-        hybrid.sort(Comparator.comparingDouble((SearchResult result) -> result.score).reversed());
-        List<SearchResult> reranked = rerankerEngine.rerank(query, hybrid, safeLimit);
-        String ragContext = ragContextBuilder.build(query, reranked, Math.min(RAG_CARD_LIMIT, safeLimit));
-        AgentSessionState activeSession = session == null ? new AgentSessionState() : session;
-        activeSession.updateLastSearch(query, reranked);
-        return new RetrievalResponse(query, reranked, ragContext, engineName(), rerankerEngine.name());
-    }
-
-    public BusinessCard getCard(String cardId) {
-        if (cardId == null) return null;
-        return cardsById.get(cardId.trim());
-    }
-
-    public String engineName() {
-        return embeddingEngine.name();
-    }
-
-    private Comparator<SearchResult> comparatorFor(SortOption option) {
-        Comparator<SearchResult> relevance = Comparator.comparingDouble((SearchResult result) -> result.score).reversed();
-        switch (option) {
-            case LATEST:
-                return Comparator.comparingLong((SearchResult result) -> result.card.createdAtMillis).reversed().thenComparing(relevance);
-            case NAME:
-                return Comparator.comparing((SearchResult result) -> safe(result.card.name), String.CASE_INSENSITIVE_ORDER).thenComparing(relevance);
-            case COMPANY:
-                return Comparator.comparing((SearchResult result) -> safe(result.card.company), String.CASE_INSENSITIVE_ORDER).thenComparing(relevance);
-            case RELEVANCE:
-            default:
-                return relevance;
-        }
-    }
-
-    private double semanticScore(float[] queryVector, BusinessCard card) {
-        Float score = embeddingEngine.cosine(queryVector, cardVectors.get(card.id));
-        return score == null ? 0.0 : score;
-    }
-
-    private double synonymScore(BusinessCard card, String query, List<String> expandedTokens) {
-        String searchableText = card.searchableText();
-        double score = 0.0;
-        for (Map.Entry<String, List<String>> entry : synonyms.entrySet()) {
-            String key = entry.getKey().toLowerCase(Locale.KOREAN);
-            if (!query.contains(key) && !expandedTokens.contains(key)) continue;
-            for (String keyword : entry.getValue()) {
-                if (searchableText.contains(keyword.toLowerCase(Locale.KOREAN))) score += 8.0;
-            }
-        }
-        return score;
-    }
-
-    private List<String> expandTokens(String query) {
-        Set<String> tokens = new LinkedHashSet<>(tokenizer.tokenize(query));
-        for (Map.Entry<String, List<String>> entry : synonyms.entrySet()) {
-            if (query.contains(entry.getKey().toLowerCase(Locale.KOREAN))) {
-                for (String value : entry.getValue()) tokens.add(value.toLowerCase(Locale.KOREAN));
-            }
-        }
-        return new ArrayList<>(tokens);
-    }
-
-    private List<SearchResult> limit(List<SearchResult> results, int limit) {
-        if (results == null || results.isEmpty() || limit <= 0) return Collections.emptyList();
-        return Collections.unmodifiableList(new ArrayList<>(results.subList(0, Math.min(limit, results.size()))));
-    }
-
-    private void installSynonyms() {
-        synonyms.put("투자", Arrays.asList("투자", "vc", "스타트업", "ir", "핀테크", "finance"));
-        synonyms.put("제조", Arrays.asList("제조", "공장", "생산", "품질", "manufacturing"));
-        synonyms.put("세미나", Arrays.asList("세미나", "컨퍼런스", "행사", "ai", "네트워킹"));
-        synonyms.put("개발자", Arrays.asList("개발", "엔지니어", "백엔드", "ai", "it"));
-        synonyms.put("대표", Arrays.asList("대표", "ceo", "founder", "창업자"));
-        synonyms.put("영업", Arrays.asList("영업", "세일즈", "파트너십", "bd"));
-    }
-
-    private String join(List<String> values, String separator) {
-        StringBuilder builder = new StringBuilder();
-        for (String value : values) {
-            if (builder.length() > 0) builder.append(separator);
-            builder.append(value);
-        }
-        return builder.toString();
-    }
-
-    private String safe(String value) {
-        return value == null ? "" : value;
-    }
+    private List<SearchResult> keywordOnly(String query,int limit){ return rank(keywordCandidateSource.searchKeyword(query,limit)); }
+    private List<SearchResult> semanticOnly(String query,int limit){ float[] q=embeddingEngine.embed(query); CosineSimilarity.normalizeInPlace(q); List<SearchResult> out=new ArrayList<>(); for(CardEmbedding e:repository.getEmbeddings(embeddingEngine.name())){ BusinessCard c=repository.getCard(e.cardId); Float sim=CosineSimilarity.cosine(q,e.vector()); if(c!=null&&sim!=null) out.add(new SearchResult(c,sim,new ScoreBreakdown(0,sim,0,0,sim),Arrays.asList("semantic"),0,sim,0)); } out.sort(Comparator.comparingDouble((SearchResult r)->r.similarity).reversed()); return rank(limit(out,limit)); }
+    private List<SearchResult> fuse(List<SearchResult> keyword,List<SearchResult> semantic){ Map<String,Double> scores=new LinkedHashMap<>(); Map<String,BusinessCard> cards=new HashMap<>(); Map<String,Double> sims=new HashMap<>(); Map<String,Set<String>> src=new HashMap<>(); add(scores,cards,sims,src,keyword,"keyword"); add(scores,cards,sims,src,semantic,"semantic"); List<SearchResult> out=new ArrayList<>(); for(String id:scores.keySet()){ double s=scores.get(id); out.add(new SearchResult(cards.get(id),s,new ScoreBreakdown(0,sims.getOrDefault(id,0.0),0,0,s),new ArrayList<>(src.get(id)),0,sims.getOrDefault(id,0.0),s)); } out.sort(Comparator.comparingDouble((SearchResult r)->r.rankFusionScore).reversed()); return out; }
+    private void add(Map<String,Double> scores,Map<String,BusinessCard> cards,Map<String,Double> sims,Map<String,Set<String>> src,List<SearchResult> list,String source){ for(int i=0;i<list.size();i++){ SearchResult r=list.get(i); scores.put(r.cardId,scores.getOrDefault(r.cardId,0.0)+1.0/(RRF_K+i+1)); cards.put(r.cardId,r.card); sims.put(r.cardId,Math.max(sims.getOrDefault(r.cardId,0.0),r.similarity)); src.computeIfAbsent(r.cardId,k->new LinkedHashSet<>()).add(source); } }
+    private List<SearchResult> rank(List<SearchResult> in){ List<SearchResult> out=new ArrayList<>(); for(int i=0;i<in.size();i++) out.add(in.get(i).withRank(i+1)); return Collections.unmodifiableList(out); }
+    private List<SearchResult> limit(List<SearchResult> r,int l){ if(r==null||l<=0)return Collections.emptyList(); return new ArrayList<>(r.subList(0,Math.min(l,r.size()))); }
 }
