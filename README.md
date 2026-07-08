@@ -1,92 +1,95 @@
 # HJP Agent Search Demo
 
-Android 온디바이스 기준으로 **DB 기반 keyword retrieval + EmbeddingGemma ONNX semantic retrieval + Reciprocal Rank Fusion hybrid retrieval + RAG context 생성** 경계를 제공하는 모듈입니다. Android UI나 LLM 답변 생성/Gemma LLM 연결은 포함하지 않습니다.
+Android 온디바이스 기준으로 **명함 탭 빠른 키워드 검색**과 **에이전트 하이브리드 검색/RAG retrieval**을 분리한 검색 모듈입니다. 기존 ONNX Runtime 기반 `OnDeviceEmbeddingEngine` 구조와 `LocalEmbeddingEngine` fallback은 유지합니다.
 
-## 달라진 점
+## 전체 구조
 
-- 기존 LocalEmbeddingEngine/하드코딩 샘플 중심 구조에서 `RetrievalService.retrieve(query, topK)` API를 추가했습니다.
-- production 경로는 `OnDeviceEmbeddingEngine`이며, 모델이 없으면 명확한 메시지와 `fallbackUsed`로 fallback 여부를 노출합니다.
-- keyword 검색의 name/company/title별 수동 가중치(50/35/25 등)를 제거하고 `searchableText` token match로 단순화했습니다.
-- keyword 점수와 cosine similarity를 직접 더하지 않고 RRF rank fusion을 사용합니다.
+- `BusinessCardRepository`: 명함 원본 데이터와 `CardEmbedding` 저장소 경계입니다.
+- `QueryAnalyzer`: 사용자 query를 `rawQuery`, `normalizedQuery`, `keywordQuery`, `semanticQuery`, `tokens`로 분석합니다.
+- `KeywordRetriever`: DB 구현이 Room FTS4, raw SQLite FTS5, LIKE fallback으로 바뀌어도 `RetrievalService` 영향이 작도록 만든 keyword retrieval 인터페이스입니다.
+- `SemanticRetriever`: `QueryAnalysis.semanticQuery`를 embedding으로 변환하고 저장된 card embedding과 cosine similarity로 semantic ranking을 만듭니다.
+- `ReciprocalRankFusion`: keyword ranking과 semantic ranking을 `1 / (60 + rank)` 공식으로 결합합니다. keyword score와 semantic score를 직접 더하지 않습니다.
+- `RagContextBuilder`: LLM prompt에 넣을 최소 명함 context를 만듭니다.
 
-## 참고 Room DB
+## 명함 탭 검색 vs 에이전트 하이브리드 검색
 
-`imported/sojung_room_data/`에 sojung android-app 브랜치에서 가져온 Room 참고 파일이 있습니다. 현재 Java core에는 `BusinessCardRepository`, `InMemoryBusinessCardRepository`, `CardEmbedding`을 두었고 Android Room에서는 같은 필드를 Entity/DAO로 옮기면 됩니다.
+### 명함 탭 검색
 
-### business_cards / card_embeddings
+짧은 키워드 입력을 대상으로 하는 빠른 검색입니다. 이름, 회사명, 직책, 부서, 산업/태그, 메모 등 `searchableText` 기반으로 찾으며 embedding, RRF, RAG context를 사용하지 않습니다.
 
-`business_cards`는 명함 원본입니다. `card_embeddings` 권장 필드는 다음과 같습니다.
+```java
+List<SearchResult> results = service.searchCardTab("코어AI 개발", SortOption.RELEVANCE, 20);
+```
 
-- `cardId`
-- `modelName`
-- `dim`
-- `vector` (`BLOB`, little-endian float32; `FloatVectorCodec` 사용)
-- `sourceTextHash`
-- `createdAt`
-- `updatedAt`
+### 에이전트 하이브리드 검색
 
-BLOB를 선택한 이유는 JSON보다 작고 Room/SQLite에서 안정적으로 저장 가능하기 때문입니다.
+자연어 query를 대상으로 합니다.
 
-## searchableText 기준
+```text
+사용자 자연어 query
+→ QueryAnalyzer
+→ KeywordRetriever keyword retrieval
+→ SemanticRetriever query embedding + vector retrieval
+→ ReciprocalRankFusion RRF 결합
+→ RagContextBuilder
+→ RetrievalResponse
+```
 
-`BusinessCard.searchableText()`는 `name`, `nameEn`, `company`, `title`, `department`, `industry`, `location`, `memo`, `tags`를 포함합니다. 기본 검색/RAG에는 `phone`, `email`, `address`를 넣지 않습니다. 상세 정보는 `getCard(cardId)`에서만 조회합니다.
+LLM 담당자는 아래 API를 호출하면 top 명함 결과와 ragContext를 받을 수 있습니다.
+
+```java
+RetrievalResponse response = retrievalService.retrieve(userQuery, 5);
+RetrievalResponse responseWithMode = service.retrieve(userQuery, 5, RetrievalMode.HYBRID);
+```
+
+`RetrievalResponse`는 `results`, `ragContext`, `queryAnalysis`, `mode`, `cardIds`, `keywordResultCount`, `semanticResultCount`, `fallbackUsed`를 포함합니다.
+
+## QueryAnalyzer 역할
+
+기본 정규화는 `trim`, lower-case 가능한 언어의 lower-case, 연속 공백 정리, 검색에 불필요한 특수문자 정리를 포함합니다. 한글/영문/숫자와 이메일/전화번호에 자주 쓰이는 `@`, `.`, `_`, `+`, `-` 등은 최대한 보존합니다.
+
+## KeywordRetriever 구현 전략
+
+현재 포함된 구현/adapter는 다음과 같습니다.
+
+- `LikeFallbackKeywordRetriever`: 현재 in-memory/일반 테이블 기반에서도 동작하는 fallback입니다. 명함 탭 검색과 agent keyword 후보 생성에 바로 사용할 수 있습니다.
+- `RoomFtsKeywordRetriever`: Room DB 담당자가 연결할 FTS4 adapter placeholder입니다.
+- `SqliteFts5KeywordRetriever`: raw SQLite FTS5 + trigram tokenizer 검토용 adapter placeholder입니다.
+
+### Room DB / SQLite FTS 전략
+
+- Room 일반 테이블(`business_cards`)은 명함 원본 데이터를 저장합니다.
+- FTS 테이블은 검색용 `searchableText` 인덱스를 저장합니다.
+- Room 사용 시 우선 `FTS4 + unicode61 tokenizer + prefix index`를 고려합니다.
+- Room FTS4에서 짧은 token/부분 문자열 매칭이 부족하면 `LIKE` fallback을 병행합니다.
+- FTS5를 직접 사용할 수 있는 raw SQLite 경로에서는 `trigram tokenizer`를 검토합니다.
+- FTS 미사용 또는 미지원 환경에서는 `LikeFallbackKeywordRetriever`를 사용합니다.
+- 최종 Room FTS 적용 방식은 DB 담당자와 협의가 필요합니다.
+
+## searchableText 기준과 개인정보 최소화
+
+`BusinessCard.searchableText()`는 `name`, `nameEn`, `company`, `title`, `department`, `industry`, `location`, `memo`, `tags`를 포함합니다. 기본 RAG context는 이름, 회사, 직책, 부서, 산업/태그, 메모, 검색에 필요한 설명 중심이며 전화번호, 이메일, 상세 주소를 과도하게 넣지 않습니다. 상세 정보는 `getCard(cardId)`로 별도 조회합니다.
 
 ## EmbeddingGemma ONNX assets
 
-모델은 git에 올리지 않습니다. 실제 배치 위치:
+대용량 모델 파일은 Git에 올리지 않습니다. 실제 배치 위치는 아래입니다.
 
 ```text
 app/src/main/assets/models/embeddinggemma.onnx
 app/src/main/assets/tokenizer/
 ```
 
-추적되는 파일은 `.gitkeep`뿐입니다. `*.onnx`, `*.safetensors`, `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json` 등은 ignore됩니다.
+추적되는 파일은 `.gitkeep`뿐입니다. `*.onnx`, `*.safetensors`, `*.tflite`, `*.task`, `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json` 등은 ignore 상태로 유지합니다.
 
-ONNX 변환은 사용자가 검증한 `google/embeddinggemma-300m` export 결과를 사용합니다. 확인된 출력 dimension은 768입니다. Android에서는 `ai.onnxruntime:onnxruntime-android` dependency를 추가했고, 실제 `OrtSession` input/output signature와 tokenizer id 매핑은 모델 파일 기준 최종 확인이 필요합니다.
+`app/build.gradle.kts`의 `androidResources { noCompress += "onnx" }` 설정은 Android asset에 포함된 ONNX 파일을 압축하지 않아 ONNX Runtime이 효율적으로 읽게 하기 위한 설정입니다.
 
-## Tokenizer 한계
+## 현재 확인된 것
 
-`TextTokenizer` 아래에 `HuggingFaceTokenizer` placeholder와 `LightweightTokenizer` fallback 계층을 분리했습니다. Android에서 `tokenizer.json` 또는 `tokenizer.model`을 처리하려면 Hugging Face tokenizers 호환 라이브러리 또는 SentencePiece Android 라이브러리를 붙여야 합니다. Python ONNX 테스트 중 tokenizer regex warning이 있었으므로 Android 통합 시 동일 문장으로 token id, attention mask, embedding cosine 결과를 반드시 재검증해야 합니다.
+1. ONNX 모델 변환 완료.
+2. 로컬 assets에 모델 포함 시 `assembleDebug` 성공.
+3. 실제 기기 ONNX Runtime 추론은 추가 테스트가 필요합니다.
 
-## RetrievalService 사용법
-
-```java
-RetrievalService retrievalService = new SearchLookupService(repository, OnDeviceEmbeddingEngine.production());
-RetrievalResponse response = retrievalService.retrieve(userQuery, 5);
-String ragContext = response.ragContext;
-// LLM prompt에 ragContext를 넣어서 답변 생성
-BusinessCard detail = retrievalService.getCard(response.cardIds.get(0)); // phone/email/address 포함 가능
-```
-
-`RetrievalResponse`는 query, top results, cardIds, ragContext, retrievalMode, embeddingModelName, keywordResultCount, semanticResultCount, fallbackUsed를 포함합니다.
-
-## RAG context 예시
-
-```text
-[cardId=C002]
-name: 오성령
-company: 코어AI
-title: AI 엔지니어
-department: AI 개발팀
-industry: it
-location: 판교
-memo: EmbeddingGemma와 로컬 벡터 검색을 실험 중
-tags: AI, 개발자, 임베딩, 검색
-```
-
-## Rank fusion
-
-Hybrid는 `1 / (60 + keywordRank) + 1 / (60 + semanticRank)` 형태의 Reciprocal Rank Fusion을 사용합니다. keyword token score와 semantic cosine similarity는 스케일이 달라 직접 가중합하지 않습니다.
-
-## 저장/수정 시 embedding 갱신
-
-`EmbeddingUpdater.upsertCardAndRefreshEmbedding(card)` 흐름:
-
-1. BusinessCard 저장/수정
-2. searchableText 생성
-3. SHA-256 sourceTextHash 계산
-4. 기존 hash와 다르면 embedding 재생성
-5. `card_embeddings` upsert
+`OnDeviceEmbeddingEngine.production()`은 production 경로이며, 실제 모델/토크나이저가 준비되지 않은 JVM demo 환경에서는 fallback 사용 여부를 `RetrievalResponse.fallbackUsed`로 노출합니다.
 
 ## Demo / evaluator
 
@@ -95,11 +98,4 @@ javac -d /tmp/hjp-classes $(find src/main/java -name '*.java')
 java -cp /tmp/hjp-classes com.hjp.searchlookup.SearchExample
 ```
 
-`SearchExample`은 keyword only, semantic only, hybrid, `RetrievalResponse.ragContext`, `getCard(cardId)` 상세 조회, evaluator 결과를 출력합니다. `eval/rag_eval_dataset.jsonl`에는 20개 query가 있고 evaluator는 LLM 답변 품질이 아닌 retrieval 품질(Top1 Accuracy, Recall@5, MRR@5)만 측정합니다.
-
-## 현재 한계
-
-1. 실제 `embeddinggemma.onnx` 파일은 repo에 포함하지 않습니다.
-2. Android에서 tokenizer와 ONNX input/output signature는 실제 모델 파일 기준으로 최종 확인이 필요합니다.
-3. 실기기 성능 검증이 필요합니다.
-4. ONNX 테스트 중 tokenizer regex warning이 있었으므로 tokenizer 동작은 Android 통합 시 추가 검증이 필요합니다.
+`SearchExample`은 명함 탭 단순 키워드 검색, 에이전트 하이브리드 검색, QueryAnalyzer 결과, keyword retrieval 후보, semantic retrieval 후보, RRF 최종 결과, ragContext, `getCard(cardId)` 상세 조회, evaluator 결과를 출력합니다.
