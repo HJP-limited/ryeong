@@ -99,3 +99,43 @@ java -cp /tmp/hjp-classes com.hjp.searchlookup.SearchExample
 ```
 
 `SearchExample`은 명함 탭 단순 키워드 검색, 에이전트 하이브리드 검색, QueryAnalyzer 결과, keyword retrieval 후보, semantic retrieval 후보, RRF 최종 결과, ragContext, `getCard(cardId)` 상세 조회, evaluator 결과를 출력합니다.
+
+## Room DB 연동 기준
+
+검색 모듈은 DB 담당 팀원의 Room DB 참고 파일을 기준으로 연결 구조를 맞췄다.
+
+참고한 파일:
+- imported/sojung_room_data/BusinessCardEntity.kt
+- imported/sojung_room_data/BusinessCardDao.kt
+- imported/sojung_room_data/HjpDatabase.kt
+- imported/sojung_room_data/RoomBusinessCardStore.kt
+- imported/sojung_room_data/BusinessCard.kt
+
+현재 SearchExample은 in-memory demo data로 실행된다.  
+실제 앱에서는 RoomBusinessCardStore 또는 BusinessCardDao에서 가져온 BusinessCardEntity를 검색 도메인 BusinessCard로 변환한 뒤 RetrievalService에 주입하면 된다.
+
+Room 일반 테이블은 명함 원본 데이터를 저장하고, FTS 테이블은 검색용 searchableText 인덱스를 저장하는 구조를 기준으로 한다.
+
+검색용 searchableText 우선 포함 필드:
+- name
+- company
+- title 또는 position
+- department
+- memo
+- tags
+- industry 또는 category
+- location
+
+기본 RAG context에는 개인정보 보호를 위해 phone, email, detailed address를 과도하게 포함하지 않는다.  
+상세 정보는 getCard(cardId)를 통해 별도 조회한다.
+
+Room 사용 시에는 FTS4 + unicode61 tokenizer + prefix index를 우선 고려한다.  
+FTS4에서 짧은 token 또는 부분 문자열 매칭이 부족하면 LIKE fallback을 병행한다.  
+FTS5 trigram은 raw SQLite 사용 시 검토한다.
+
+현재 구조:
+- 명함 탭 검색: QueryAnalyzer + LikeFallbackKeywordRetriever 기반 단순 키워드 검색
+- 에이전트 검색: QueryAnalyzer → KeywordRetriever → SemanticRetriever → ReciprocalRankFusion → RagContextBuilder → RetrievalResponse
+- DB 교체 지점: KeywordRetriever / BusinessCardRepository
+- 실제 DB 연결 지점: BusinessCardDao 또는 RoomBusinessCardStore → BusinessCard 변환 → RetrievalService 주입
+
