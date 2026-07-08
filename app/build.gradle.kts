@@ -4,6 +4,9 @@ plugins {
 }
 
 android {
+    androidResources {
+        noCompress += "onnx"
+    }
     namespace = "com.example.hjp"
     compileSdk {
         version = release(36) {
