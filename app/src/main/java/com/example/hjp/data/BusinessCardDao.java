@@ -30,9 +30,17 @@ public abstract class BusinessCardDao {
 
     @Transaction
     public void upsertCards(List<BusinessCardEntity> cards) {
-        int row = 1;
         for (BusinessCardEntity card : cards) {
             upsertCard(card);
+        }
+        rebuildFts();
+    }
+
+    @Transaction
+    public void rebuildFts() {
+        clearFts();
+        int row = 1;
+        for (BusinessCardEntity card : allCards()) {
             upsertFts(new BusinessCardFtsEntity(row++, card.id, card.searchableText()));
         }
     }
@@ -43,6 +51,7 @@ public abstract class BusinessCardDao {
     @Query("SELECT id FROM business_cards WHERE "
             + "name LIKE :like OR nameEn LIKE :like OR company LIKE :like OR title LIKE :like "
             + "OR department LIKE :like OR industry LIKE :like OR location LIKE :like "
+            + "OR phone LIKE :like OR email LIKE :like OR address LIKE :like "
             + "OR memo LIKE :like OR tags LIKE :like LIMIT :limit")
     public abstract List<String> searchLikeIds(String like, int limit);
 

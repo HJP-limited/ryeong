@@ -63,6 +63,8 @@ data class AnalyzedSearchQuery(
     val raw: String,
     val normalized: String,
     val keywordTokens: List<String>,
+    val ngramTokens: List<String>,
+    val ftsTerms: List<String>,
     val keywordQuery: String,
     val semanticQuery: String,
 )
@@ -74,6 +76,7 @@ class CardSearchService(
     private val mediaPipeProvider = MediaPipeEmbeddingGemmaProvider(context)
     private val embeddingProvider: TextEmbeddingProvider = mediaPipeProvider
     private val dao = HjpDatabase.getInstance(context).businessCardDao()
+    private var ftsRebuilt = false
 
     val engineStatus: String
         get() = "${embeddingProvider.name} / Room FTS"
@@ -109,9 +112,16 @@ class CardSearchService(
     }
 
     fun seedIfEmpty() {
-        if (dao.countCards() > 0) return
-        dao.clearFts()
-        dao.upsertCards(sampleCards())
+        if (dao.countCards() == 0) {
+            dao.clearFts()
+            dao.upsertCards(sampleCards())
+            ftsRebuilt = true
+            return
+        }
+        if (!ftsRebuilt) {
+            dao.rebuildFts()
+            ftsRebuilt = true
+        }
     }
 
     fun indexEmbeddings() {
@@ -145,19 +155,15 @@ class CardSearchService(
         seedIfEmpty()
         val safeLimit = limit.coerceIn(1, 20)
         val analyzed = analyzeQuery(rawQuery)
-        val ids = keywordIds(analyzed.keywordTokens, safeLimit)
-        val cards = if (ids.isEmpty() && analyzed.keywordQuery.isBlank()) {
-            dao.allCards().take(safeLimit)
-        } else {
-            ids.mapNotNull { dao.findCard(it) }
-        }
-        val hits = cards.mapIndexed { index, card ->
-            CardSearchHit(
-                card = card,
-                score = 1.0 / (index + 1),
-                keywordRank = index + 1,
-                vectorRank = null,
-                similarity = 0f,
+        val hits = keywordHits(analyzed, safeLimit)
+        if (hits.isNotEmpty()) {
+            return CardSearchResponse(
+                query = analyzed.raw,
+                engine = "Room FTS keyword",
+                retrieval = "room_fts_keyword_only",
+                keywordQuery = analyzed.keywordQuery,
+                semanticQuery = "",
+                results = hits,
             )
         }
         return CardSearchResponse(
@@ -166,7 +172,7 @@ class CardSearchService(
             retrieval = "room_fts_keyword_only",
             keywordQuery = analyzed.keywordQuery,
             semanticQuery = "",
-            results = hits,
+            results = emptyList(),
         )
     }
 
@@ -176,7 +182,8 @@ class CardSearchService(
         indexEmbeddings()
         val safeLimit = limit.coerceIn(1, 20)
         val analyzed = analyzeQuery(rawQuery)
-        val keywordIds = keywordIds(analyzed.keywordTokens, 40)
+        val keywordHits = keywordHits(analyzed, 40)
+        val keywordIds = keywordHits.map { it.card.id }
         val queryVector = embeddingProvider.embed(analyzed.semanticQuery)
         val vectorScores = if (queryVector.isNotEmpty()) vectorScores(queryVector, 40) else emptyList()
 
@@ -225,14 +232,47 @@ class CardSearchService(
             .filter { it.length >= 2 }
             .filterNot { it in stopWords }
             .distinct()
+        val ngrams = tokens
+            .filter { it.length >= 3 && it.any { char -> Character.UnicodeScript.of(char.code) == Character.UnicodeScript.HANGUL } }
+            .flatMap { token -> token.windowed(2, 1) }
+            .distinct()
+        val ftsTerms = (tokens + ngrams).distinct()
         val keywordQuery = tokens.joinToString(" ")
         return AnalyzedSearchQuery(
             raw = raw,
             normalized = normalized,
             keywordTokens = tokens,
+            ngramTokens = ngrams,
+            ftsTerms = ftsTerms,
             keywordQuery = keywordQuery,
             semanticQuery = normalized.ifBlank { raw },
         )
+    }
+
+    private fun keywordHits(query: AnalyzedSearchQuery, limit: Int): List<CardSearchHit> {
+        val ids = keywordIds(query.ftsTerms, limit * 4)
+        val cards = if (ids.isEmpty() && query.keywordQuery.isBlank()) {
+            dao.allCards()
+        } else {
+            ids.mapNotNull { dao.findCard(it) }
+        }
+        return cards
+            .map { card ->
+                val score = keywordQualityScore(card, query)
+                card to score
+            }
+            .filter { query.keywordQuery.isBlank() || it.second > 0.0 }
+            .sortedWith(compareByDescending<Pair<BusinessCardEntity, Double>> { it.second }.thenBy { it.first.name })
+            .take(limit)
+            .mapIndexed { index, scored ->
+                CardSearchHit(
+                    card = scored.first,
+                    score = scored.second,
+                    keywordRank = index + 1,
+                    vectorRank = null,
+                    similarity = 0f,
+                )
+            }
     }
 
     private fun keywordIds(tokens: List<String>, limit: Int): List<String> {
@@ -251,6 +291,31 @@ class CardSearchService(
             .distinct()
             .take(limit)
     }
+
+    private fun keywordQualityScore(card: BusinessCardEntity, query: AnalyzedSearchQuery): Double {
+        if (query.keywordTokens.isEmpty()) return 1.0
+        val normalizedText = normalizeForKeywordSearch(card.searchableText())
+        val textTokens = normalizedText.split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
+        var score = 0.0
+        query.keywordTokens.forEach { token ->
+            score += when {
+                token in textTokens -> 40.0
+                textTokens.any { it.startsWith(token) } -> 25.0
+                normalizedText.contains(token) -> 12.0
+                else -> 0.0
+            }
+        }
+        query.ngramTokens.forEach { ngram ->
+            if (ngram in textTokens || normalizedText.contains(ngram)) score += 4.0
+        }
+        return score
+    }
+
+    private fun normalizeForKeywordSearch(raw: String): String =
+        raw.lowercase(Locale.KOREAN)
+            .replace(Regex("[^\\p{L}\\p{N}\\s@._+-]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
 
     private fun vectorScores(queryVector: FloatArray, limit: Int): List<Pair<String, Float>> =
         dao.embeddingsForModel(embeddingProvider.name)

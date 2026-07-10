@@ -56,8 +56,10 @@ public class BusinessCardEntity {
     }
 
     public String searchableText() {
-        return (name + " " + nameEn + " " + company + " " + title + " " + department + " "
-                + industry + " " + location + " " + memo + " " + tags).toLowerCase();
+        String source = name + " " + nameEn + " " + company + " " + title + " " + department + " "
+                + industry + " " + location + " " + phone + " " + email + " " + address + " " + memo + " " + tags;
+        String normalized = normalizeSearchText(source);
+        return source.toLowerCase() + " " + normalized + " " + hangulBigrams(normalized);
     }
 
     public String ragContext() {
@@ -74,5 +76,42 @@ public class BusinessCardEntity {
 
     private static String value(String raw) {
         return raw == null ? "" : raw;
+    }
+
+    private static String normalizeSearchText(String raw) {
+        String lower = raw == null ? "" : raw.toLowerCase();
+        StringBuilder out = new StringBuilder(lower.length());
+        boolean lastSpace = true;
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            if (Character.isLetterOrDigit(c) || c == '@' || c == '.' || c == '_' || c == '+' || c == '-') {
+                out.append(c);
+                lastSpace = false;
+            } else if (!lastSpace) {
+                out.append(' ');
+                lastSpace = true;
+            }
+        }
+        return out.toString().trim().replaceAll("\\s+", " ");
+    }
+
+    private static String hangulBigrams(String normalized) {
+        StringBuilder out = new StringBuilder();
+        String[] tokens = normalized.split("\\s+");
+        for (String token : tokens) {
+            if (token.length() < 3 || !containsHangul(token)) continue;
+            for (int i = 0; i < token.length() - 1; i++) {
+                out.append(token, i, i + 2).append(' ');
+            }
+        }
+        return out.toString().trim();
+    }
+
+    private static boolean containsHangul(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            Character.UnicodeScript script = Character.UnicodeScript.of(value.charAt(i));
+            if (script == Character.UnicodeScript.HANGUL) return true;
+        }
+        return false;
     }
 }
