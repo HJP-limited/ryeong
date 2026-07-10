@@ -1,9 +1,13 @@
 package com.example.hjp
 
+import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.hjp.agent.LiteRtLmChatEngine
 import com.example.hjp.agent.tools.CreateCalendarEventTool
@@ -32,6 +37,7 @@ import com.example.hjp.agent.tools.SearchBusinessCardsTool
 import com.example.hjp.agent.tools.ToolRegistry
 import com.example.hjp.search.CardSearchService
 import com.example.hjp.ui.theme.HJPTheme
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,22 +77,41 @@ fun AgentTestScreen(
     llmStatus: String,
     modifier: Modifier = Modifier,
 ) {
-    var query by remember { mutableStateOf("AI 개발팀 사람 찾아줘") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var query by remember { mutableStateOf("AI developer in Pangyo") }
     var result by remember { mutableStateOf("Ready") }
+    var pendingModelFileName by remember { mutableStateOf("embeddinggemma_quant.tflite") }
     var toolCall by remember {
         mutableStateOf(
-            """
-            {
-              "name": "search_business_cards",
-              "args": {
-                "query": "AI 개발팀 사람 찾아줘",
-                "limit": 5
-              }
-            }
-            """.trimIndent()
+            JSONObject()
+                .put("name", "search_business_cards")
+                .put("args", JSONObject().put("query", query).put("limit", 5))
+                .toString(2)
         )
     }
-    val scope = rememberCoroutineScope()
+
+    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            result = withContext(Dispatchers.IO) {
+                try {
+                    val copied = copyModelToAppStorage(context, uri, pendingModelFileName)
+                    JSONObject()
+                        .put("status", "success")
+                        .put("copied_to", copied.absolutePath)
+                        .put("bytes", copied.length())
+                        .put("next", "Press Diagnostics. If the app was already open before importing EmbeddingGemma, restart it once.")
+                        .toString(2)
+                } catch (e: Throwable) {
+                    JSONObject()
+                        .put("status", "error")
+                        .put("message", e.message ?: e.javaClass.simpleName)
+                        .toString(2)
+                }
+            }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -98,6 +123,21 @@ fun AgentTestScreen(
         Text("HJP On-device Agent", style = MaterialTheme.typography.titleLarge)
         Text("LLM: $llmStatus", style = MaterialTheme.typography.bodySmall)
         Text("Search: ${searchService.engineStatus}", style = MaterialTheme.typography.bodySmall)
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                pendingModelFileName = "embeddinggemma_quant.tflite"
+                modelPicker.launch(arrayOf("application/octet-stream", "*/*"))
+            }) {
+                Text("Import embedder")
+            }
+            Button(onClick = {
+                pendingModelFileName = "functiongemma_270m.litertlm"
+                modelPicker.launch(arrayOf("application/octet-stream", "*/*"))
+            }) {
+                Text("Import LLM")
+            }
+        }
 
         OutlinedTextField(
             value = query,
@@ -173,4 +213,15 @@ fun AgentTestScreen(
         Text("Available tools", style = MaterialTheme.typography.titleMedium)
         Text(registry.declarationsJson(), style = MaterialTheme.typography.bodySmall)
     }
+}
+
+private fun copyModelToAppStorage(context: Context, uri: Uri, fileName: String): File {
+    val dir = context.getExternalFilesDir("models") ?: File(context.filesDir, "models")
+    dir.mkdirs()
+    val out = File(dir, fileName)
+    context.contentResolver.openInputStream(uri).use { input ->
+        requireNotNull(input) { "Could not open selected file." }
+        out.outputStream().use { output -> input.copyTo(output) }
+    }
+    return out
 }

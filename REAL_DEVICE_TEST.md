@@ -77,7 +77,20 @@ For one phone next to the development PC, use USB install. This is fastest.
 For another tester, use one of these:
 
 - Send `app/build/outputs/apk/debug/app-debug.apk` directly and allow "install unknown apps" on the phone.
+- Send `embeddinggemma_quant.tflite` to the phone Downloads folder, open the app, press `Import embedder`, and choose the file.
+- Send `functiongemma_270m.litertlm` the same way, press `Import LLM`, and choose the file.
 - Use Firebase App Distribution for a small tester group.
 - Use Google Play Internal App Sharing or Internal Testing if the app is already connected to a Play Console project.
 
 Debug APKs are signed with the local debug key and are fine for temporary device testing. Do not use them for public release.
+
+## No USB Cable Flow
+
+1. Send `app/build/outputs/apk/debug/app-debug.apk` to the phone.
+2. Install it after enabling "install unknown apps" for the app used to open the APK.
+3. Send `models/legacy/embeddinggemma_quant.tflite` to the phone, usually into Downloads.
+4. Open HJP, press `Import embedder`, and select `embeddinggemma_quant.tflite`.
+5. Press `Diagnostics`.
+6. If you have FunctionGemma, send `functiongemma_270m.litertlm`, press `Import LLM`, and select it.
+
+Embedding search intentionally has no fallback. If Diagnostics does not show `active_embedding_model_backed: true`, search will return an error.
