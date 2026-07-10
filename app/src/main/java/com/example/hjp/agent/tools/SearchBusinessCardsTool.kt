@@ -39,7 +39,7 @@ class SearchBusinessCardsTool(
         if (query.isBlank()) return@withContext ToolResults.error("query is required.")
         val limit = args.optInt("limit", 5).coerceIn(1, 10)
         val response = try {
-            searchService.search(query, limit)
+            searchService.searchHybrid(query, limit)
         } catch (e: Throwable) {
             return@withContext ToolResults.error(e.message ?: e.javaClass.simpleName)
         }
@@ -48,7 +48,9 @@ class SearchBusinessCardsTool(
             .put("message", "Found ${response.results.size} business cards.")
             .put("query", response.query)
             .put("engine", response.engine)
-            .put("retrieval", "room_fts_plus_embeddinggemma_rrf")
+            .put("retrieval", response.retrieval)
+            .put("keyword_query", response.keywordQuery)
+            .put("semantic_query", response.semanticQuery)
             .put("cards", JSONArray(response.results.map { hit ->
                 JSONObject()
                     .put("card_id", hit.card.id)

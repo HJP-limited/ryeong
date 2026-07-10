@@ -21,6 +21,9 @@ data class CardSearchHit(
 data class CardSearchResponse(
     val query: String,
     val engine: String,
+    val retrieval: String,
+    val keywordQuery: String,
+    val semanticQuery: String,
     val results: List<CardSearchHit>,
 ) {
     fun ragContext(limit: Int = 5): String =
@@ -48,11 +51,21 @@ data class CardSearchResponse(
         return JSONObject()
             .put("query", query)
             .put("engine", engine)
-            .put("retrieval", "room_fts_plus_embeddinggemma_rrf")
+            .put("retrieval", retrieval)
+            .put("keyword_query", keywordQuery)
+            .put("semantic_query", semanticQuery)
             .put("cards", cards)
             .put("rag_context", ragContext())
     }
 }
+
+data class AnalyzedSearchQuery(
+    val raw: String,
+    val normalized: String,
+    val keywordTokens: List<String>,
+    val keywordQuery: String,
+    val semanticQuery: String,
+)
 
 class CardSearchService(
     context: Context,
@@ -126,14 +139,45 @@ class CardSearchService(
         }
     }
 
-    fun search(rawQuery: String, limit: Int = 5): CardSearchResponse {
+    fun search(rawQuery: String, limit: Int = 5): CardSearchResponse = searchHybrid(rawQuery, limit)
+
+    fun searchKeywordOnly(rawQuery: String, limit: Int = 20): CardSearchResponse {
+        seedIfEmpty()
+        val safeLimit = limit.coerceIn(1, 20)
+        val analyzed = analyzeQuery(rawQuery)
+        val ids = keywordIds(analyzed.keywordTokens, safeLimit)
+        val cards = if (ids.isEmpty() && analyzed.keywordQuery.isBlank()) {
+            dao.allCards().take(safeLimit)
+        } else {
+            ids.mapNotNull { dao.findCard(it) }
+        }
+        val hits = cards.mapIndexed { index, card ->
+            CardSearchHit(
+                card = card,
+                score = 1.0 / (index + 1),
+                keywordRank = index + 1,
+                vectorRank = null,
+                similarity = 0f,
+            )
+        }
+        return CardSearchResponse(
+            query = analyzed.raw,
+            engine = "Room FTS keyword",
+            retrieval = "room_fts_keyword_only",
+            keywordQuery = analyzed.keywordQuery,
+            semanticQuery = "",
+            results = hits,
+        )
+    }
+
+    fun searchHybrid(rawQuery: String, limit: Int = 5): CardSearchResponse {
         seedIfEmpty()
         requireEmbeddingModel()
         indexEmbeddings()
-        val query = rawQuery.trim().lowercase(Locale.KOREAN)
         val safeLimit = limit.coerceIn(1, 20)
-        val keywordIds = keywordIds(query, 40)
-        val queryVector = embeddingProvider.embed(query)
+        val analyzed = analyzeQuery(rawQuery)
+        val keywordIds = keywordIds(analyzed.keywordTokens, 40)
+        val queryVector = embeddingProvider.embed(analyzed.semanticQuery)
         val vectorScores = if (queryVector.isNotEmpty()) vectorScores(queryVector, 40) else emptyList()
 
         val keywordRank = keywordIds.mapIndexed { index, id -> id to index + 1 }.toMap()
@@ -155,14 +199,46 @@ class CardSearchService(
                 .thenBy { it.card.name }
         ).take(safeLimit)
 
-        return CardSearchResponse(query, engineStatus, hits)
+        return CardSearchResponse(
+            query = analyzed.raw,
+            engine = engineStatus,
+            retrieval = "room_fts_plus_embeddinggemma_rrf",
+            keywordQuery = analyzed.keywordQuery,
+            semanticQuery = analyzed.semanticQuery,
+            results = hits,
+        )
     }
 
-    private fun keywordIds(query: String, limit: Int): List<String> {
-        if (query.isBlank()) return dao.allCards().take(limit).map { it.id }
-        val match = query.split(Regex("\\s+"))
-            .map { it.trim().replace("\"", "\"\"") }
+    private fun analyzeQuery(rawQuery: String): AnalyzedSearchQuery {
+        val raw = rawQuery.trim()
+        val normalized = raw
+            .lowercase(Locale.KOREAN)
+            .replace(Regex("[^\\p{L}\\p{N}\\s@._+-]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val stopWords = setOf(
+            "찾아줘", "찾아", "알려줘", "있는", "사람", "명함", "연락처", "누구",
+            "please", "find", "show", "me", "who", "is", "are", "the", "a", "an"
+        )
+        val tokens = normalized.split(Regex("\\s+"))
+            .map { it.trim() }
             .filter { it.length >= 2 }
+            .filterNot { it in stopWords }
+            .distinct()
+        val keywordQuery = tokens.joinToString(" ")
+        return AnalyzedSearchQuery(
+            raw = raw,
+            normalized = normalized,
+            keywordTokens = tokens,
+            keywordQuery = keywordQuery,
+            semanticQuery = normalized.ifBlank { raw },
+        )
+    }
+
+    private fun keywordIds(tokens: List<String>, limit: Int): List<String> {
+        if (tokens.isEmpty()) return dao.allCards().take(limit).map { it.id }
+        val match = tokens
+            .map { it.trim().replace("\"", "\"\"") }
             .joinToString(" OR ") { "\"$it\"" }
         val ids = try {
             if (match.isBlank()) emptyList() else dao.searchFtsIds(match, limit)
@@ -170,8 +246,8 @@ class CardSearchService(
             emptyList()
         }
         if (ids.isNotEmpty()) return ids
-        return query.split(Regex("\\s+"))
-            .flatMap { token -> if (token.length >= 2) dao.searchLikeIds("%$token%", limit) else emptyList() }
+        return tokens
+            .flatMap { token -> dao.searchLikeIds("%$token%", limit) }
             .distinct()
             .take(limit)
     }
