@@ -76,7 +76,7 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
             status = "loaded from asset $assetName"
         } catch (e: Throwable) {
             textEmbedder = null
-            status = "load failed from asset: ${e.javaClass.simpleName}"
+            status = "load failed from asset: ${describeThrowable(e)}"
         }
     }
 
@@ -93,7 +93,7 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
             status = "loaded from ${modelFile.absolutePath}"
         } catch (e: Throwable) {
             textEmbedder = null
-            status = "load failed from file: ${e.javaClass.simpleName}"
+            status = "load failed from file: ${describeThrowable(e)}"
         }
     }
 
@@ -149,6 +149,13 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
         }
         buffer.rewind()
         return buffer
+    }
+
+    private fun describeThrowable(error: Throwable): String {
+        val chain = generateSequence(error) { it.cause }.take(4).toList()
+        return chain.joinToString(" -> ") { item ->
+            item.javaClass.simpleName + item.message?.let { ": $it" }.orEmpty()
+        }
     }
 }
 
