@@ -7,7 +7,6 @@ import com.example.hjp.data.CardEmbeddingEntity
 import com.example.hjp.data.HjpDatabase
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.Locale
 import kotlin.system.measureTimeMillis
 
 data class CardSearchHit(
@@ -58,16 +57,6 @@ data class CardSearchResponse(
             .put("rag_context", ragContext())
     }
 }
-
-data class AnalyzedSearchQuery(
-    val raw: String,
-    val normalized: String,
-    val keywordTokens: List<String>,
-    val ngramTokens: List<String>,
-    val ftsTerms: List<String>,
-    val keywordQuery: String,
-    val semanticQuery: String,
-)
 
 class CardSearchService(
     context: Context,
@@ -154,7 +143,7 @@ class CardSearchService(
     fun searchKeywordOnly(rawQuery: String, limit: Int = 20): CardSearchResponse {
         seedIfEmpty()
         val safeLimit = limit.coerceIn(1, 20)
-        val analyzed = analyzeQuery(rawQuery)
+        val analyzed = KeywordSearchRanker.analyze(rawQuery)
         val hits = keywordHits(analyzed, safeLimit)
         if (hits.isNotEmpty()) {
             return CardSearchResponse(
@@ -181,7 +170,7 @@ class CardSearchService(
         requireEmbeddingModel()
         indexEmbeddings()
         val safeLimit = limit.coerceIn(1, 20)
-        val analyzed = analyzeQuery(rawQuery)
+        val analyzed = KeywordSearchRanker.analyze(rawQuery)
         val keywordHits = keywordHits(analyzed, 40)
         val keywordIds = keywordHits.map { it.card.id }
         val queryVector = embeddingProvider.embed(analyzed.semanticQuery)
@@ -216,39 +205,6 @@ class CardSearchService(
         )
     }
 
-    private fun analyzeQuery(rawQuery: String): AnalyzedSearchQuery {
-        val raw = rawQuery.trim()
-        val normalized = raw
-            .lowercase(Locale.KOREAN)
-            .replace(Regex("[^\\p{L}\\p{N}\\s@._+-]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-        val stopWords = setOf(
-            "찾아줘", "찾아", "알려줘", "있는", "사람", "명함", "연락처", "누구",
-            "please", "find", "show", "me", "who", "is", "are", "the", "a", "an"
-        )
-        val tokens = normalized.split(Regex("\\s+"))
-            .map { it.trim() }
-            .filter { it.length >= 2 }
-            .filterNot { it in stopWords }
-            .distinct()
-        val ngrams = tokens
-            .filter { it.length >= 3 && it.any { char -> Character.UnicodeScript.of(char.code) == Character.UnicodeScript.HANGUL } }
-            .flatMap { token -> token.windowed(2, 1) }
-            .distinct()
-        val ftsTerms = (tokens + ngrams).distinct()
-        val keywordQuery = tokens.joinToString(" ")
-        return AnalyzedSearchQuery(
-            raw = raw,
-            normalized = normalized,
-            keywordTokens = tokens,
-            ngramTokens = ngrams,
-            ftsTerms = ftsTerms,
-            keywordQuery = keywordQuery,
-            semanticQuery = normalized.ifBlank { raw },
-        )
-    }
-
     private fun keywordHits(query: AnalyzedSearchQuery, limit: Int): List<CardSearchHit> {
         val ids = keywordIds(query.ftsTerms, limit * 4)
         val cards = if (ids.isEmpty() && query.keywordQuery.isBlank()) {
@@ -258,7 +214,7 @@ class CardSearchService(
         }
         return cards
             .map { card ->
-                val score = keywordQualityScore(card, query)
+                val score = KeywordSearchRanker.score(card, query)
                 card to score
             }
             .filter { query.keywordQuery.isBlank() || it.second > 0.0 }
@@ -291,31 +247,6 @@ class CardSearchService(
             .distinct()
             .take(limit)
     }
-
-    private fun keywordQualityScore(card: BusinessCardEntity, query: AnalyzedSearchQuery): Double {
-        if (query.keywordTokens.isEmpty()) return 1.0
-        val normalizedText = normalizeForKeywordSearch(card.searchableText())
-        val textTokens = normalizedText.split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
-        var score = 0.0
-        query.keywordTokens.forEach { token ->
-            score += when {
-                token in textTokens -> 40.0
-                textTokens.any { it.startsWith(token) } -> 25.0
-                normalizedText.contains(token) -> 12.0
-                else -> 0.0
-            }
-        }
-        query.ngramTokens.forEach { ngram ->
-            if (ngram in textTokens || normalizedText.contains(ngram)) score += 4.0
-        }
-        return score
-    }
-
-    private fun normalizeForKeywordSearch(raw: String): String =
-        raw.lowercase(Locale.KOREAN)
-            .replace(Regex("[^\\p{L}\\p{N}\\s@._+-]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
 
     private fun vectorScores(queryVector: FloatArray, limit: Int): List<Pair<String, Float>> =
         dao.embeddingsForModel(embeddingProvider.name)
