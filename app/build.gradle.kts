@@ -6,6 +6,9 @@ plugins {
 android {
     androidResources {
         noCompress += "onnx"
+        noCompress += "tflite"
+        noCompress += "task"
+        noCompress += "litertlm"
     }
     namespace = "com.example.hjp"
     compileSdk {
@@ -22,6 +25,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -56,9 +62,8 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
-}
-// Production Android path for on-device EmbeddingGemma ONNX inference.
-// The JVM demo remains dependency-light; actual model assets are ignored by git.
-dependencies {
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    implementation("androidx.room:room-runtime:2.6.1")
+    annotationProcessor("androidx.room:room-compiler:2.6.1")
+    implementation("com.google.mediapipe:tasks-text:0.10.14")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
 }
