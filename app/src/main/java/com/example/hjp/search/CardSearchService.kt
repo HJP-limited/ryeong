@@ -59,8 +59,7 @@ class CardSearchService(
 ) {
     private val appContext = context.applicationContext
     private val mediaPipeProvider = MediaPipeEmbeddingGemmaProvider(context)
-    private val embeddingProvider: TextEmbeddingProvider =
-        if (mediaPipeProvider.isModelBacked) mediaPipeProvider else LocalHashEmbeddingProvider()
+    private val embeddingProvider: TextEmbeddingProvider = mediaPipeProvider
     private val dao = HjpDatabase.getInstance(context).businessCardDao()
 
     val engineStatus: String
@@ -71,8 +70,10 @@ class CardSearchService(
         var dimensions = 0
         var elapsedMs = 0L
         val error = try {
-            elapsedMs = measureTimeMillis {
-                dimensions = embeddingProvider.embed("AI developer in Pangyo").size
+            if (embeddingProvider.isModelBacked) {
+                elapsedMs = measureTimeMillis {
+                    dimensions = embeddingProvider.embed("AI developer in Pangyo").size
+                }
             }
             ""
         } catch (e: Throwable) {
@@ -102,6 +103,7 @@ class CardSearchService(
 
     fun indexEmbeddings() {
         seedIfEmpty()
+        requireEmbeddingModel()
         dao.allCards().forEach { card ->
             val text = card.searchableText()
             val hash = sha256(text)
@@ -126,6 +128,7 @@ class CardSearchService(
 
     fun search(rawQuery: String, limit: Int = 5): CardSearchResponse {
         seedIfEmpty()
+        requireEmbeddingModel()
         indexEmbeddings()
         val query = rawQuery.trim().lowercase(Locale.KOREAN)
         val safeLimit = limit.coerceIn(1, 20)
@@ -183,6 +186,14 @@ class CardSearchService(
             .take(limit)
 
     private fun rrf(rank: Int?): Double = if (rank == null) 0.0 else 1.0 / (60.0 + rank)
+
+    private fun requireEmbeddingModel() {
+        if (!embeddingProvider.isModelBacked) {
+            throw IllegalStateException(
+                "EmbeddingGemma is required but not loaded: ${embeddingProvider.diagnosticStatus}"
+            )
+        }
+    }
 
     private fun sampleCards(): List<BusinessCardEntity> = listOf(
         BusinessCardEntity(

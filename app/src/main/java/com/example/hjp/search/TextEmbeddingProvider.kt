@@ -6,7 +6,6 @@ import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
-import java.util.Locale
 import kotlin.math.sqrt
 
 interface TextEmbeddingProvider {
@@ -45,7 +44,7 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
     }
 
     override fun embed(text: String): FloatArray {
-        val embedder = textEmbedder ?: return FloatArray(0)
+        val embedder = textEmbedder ?: throw IllegalStateException("EmbeddingGemma is not loaded: $status")
         return try {
             val result = embedder.javaClass.getMethod("embed", String::class.java).invoke(embedder, text)
             val embeddingResult = result.javaClass.getMethod("embeddingResult").invoke(result)
@@ -60,7 +59,7 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
             normalize(vector)
         } catch (e: Throwable) {
             status = "embed failed: ${e.javaClass.simpleName}"
-            FloatArray(0)
+            throw IllegalStateException(status, e)
         }
     }
 
@@ -72,24 +71,12 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
                 .getMethod("setModelAssetPath", String::class.java)
                 .invoke(baseOptionsBuilder, assetName)
             val baseOptions = baseOptionsBuilder.javaClass.getMethod("build").invoke(baseOptionsBuilder)
-
-            val optionsClass = Class.forName(
-                "com.google.mediapipe.tasks.text.textembedder.TextEmbedder\$TextEmbedderOptions"
-            )
-            val optionsBuilder = optionsClass.getMethod("builder").invoke(null)
-            optionsBuilder.javaClass
-                .getMethod("setBaseOptions", baseOptionsClass)
-                .invoke(optionsBuilder, baseOptions)
-            val options = optionsBuilder.javaClass.getMethod("build").invoke(optionsBuilder)
-
-            val textEmbedderClass = Class.forName("com.google.mediapipe.tasks.text.textembedder.TextEmbedder")
-            textEmbedder = textEmbedderClass
-                .getMethod("createFromOptions", Context::class.java, optionsClass)
-                .invoke(null, appContext, options)
-            status = "loaded"
+                ?: throw IllegalStateException("BaseOptions build returned null")
+            setupWithBaseOptions(baseOptions, baseOptionsClass)
+            status = "loaded from asset $assetName"
         } catch (e: Throwable) {
             textEmbedder = null
-            status = "load failed: ${e.javaClass.simpleName}"
+            status = "load failed from asset: ${e.javaClass.simpleName}"
         }
     }
 
@@ -97,30 +84,33 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
         try {
             val baseOptionsClass = Class.forName("com.google.mediapipe.tasks.core.BaseOptions")
             val baseOptionsBuilder = baseOptionsClass.getMethod("builder").invoke(null)
-            val buffer = readDirectBuffer(modelFile)
             baseOptionsBuilder.javaClass
                 .getMethod("setModelAssetBuffer", ByteBuffer::class.java)
-                .invoke(baseOptionsBuilder, buffer)
+                .invoke(baseOptionsBuilder, readDirectBuffer(modelFile))
             val baseOptions = baseOptionsBuilder.javaClass.getMethod("build").invoke(baseOptionsBuilder)
-
-            val optionsClass = Class.forName(
-                "com.google.mediapipe.tasks.text.textembedder.TextEmbedder\$TextEmbedderOptions"
-            )
-            val optionsBuilder = optionsClass.getMethod("builder").invoke(null)
-            optionsBuilder.javaClass
-                .getMethod("setBaseOptions", baseOptionsClass)
-                .invoke(optionsBuilder, baseOptions)
-            val options = optionsBuilder.javaClass.getMethod("build").invoke(optionsBuilder)
-
-            val textEmbedderClass = Class.forName("com.google.mediapipe.tasks.text.textembedder.TextEmbedder")
-            textEmbedder = textEmbedderClass
-                .getMethod("createFromOptions", Context::class.java, optionsClass)
-                .invoke(null, appContext, options)
+                ?: throw IllegalStateException("BaseOptions build returned null")
+            setupWithBaseOptions(baseOptions, baseOptionsClass)
             status = "loaded from ${modelFile.absolutePath}"
         } catch (e: Throwable) {
             textEmbedder = null
             status = "load failed from file: ${e.javaClass.simpleName}"
         }
+    }
+
+    private fun setupWithBaseOptions(baseOptions: Any, baseOptionsClass: Class<*>) {
+        val optionsClass = Class.forName(
+            "com.google.mediapipe.tasks.text.textembedder.TextEmbedder\$TextEmbedderOptions"
+        )
+        val optionsBuilder = optionsClass.getMethod("builder").invoke(null)
+        optionsBuilder.javaClass
+            .getMethod("setBaseOptions", baseOptionsClass)
+            .invoke(optionsBuilder, baseOptions)
+        val options = optionsBuilder.javaClass.getMethod("build").invoke(optionsBuilder)
+
+        val textEmbedderClass = Class.forName("com.google.mediapipe.tasks.text.textembedder.TextEmbedder")
+        textEmbedder = textEmbedderClass
+            .getMethod("createFromOptions", Context::class.java, optionsClass)
+            .invoke(null, appContext, options)
     }
 
     private fun assetExists(name: String): Boolean =
@@ -159,37 +149,6 @@ class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider 
         }
         buffer.rewind()
         return buffer
-    }
-}
-
-class LocalHashEmbeddingProvider : TextEmbeddingProvider {
-    override val name = "LocalHashEmbeddingProvider"
-    override val isModelBacked = false
-    override val diagnosticStatus = "fallback hash embedding"
-
-    override fun embed(text: String): FloatArray {
-        val vector = FloatArray(192)
-        val normalized = text.lowercase(Locale.KOREAN)
-            .replace(Regex("[^0-9a-zA-Z가-힣\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-        if (normalized.isEmpty()) return vector
-        normalized.split(" ").forEach { token ->
-            add(vector, "w:$token", 1.0f)
-            for (n in 2..3) {
-                if (token.length >= n) {
-                    for (i in 0..token.length - n) add(vector, "g:${token.substring(i, i + n)}", 0.35f)
-                }
-            }
-        }
-        return normalize(vector)
-    }
-
-    private fun add(vector: FloatArray, feature: String, weight: Float) {
-        val hash = feature.hashCode()
-        val index = kotlin.math.abs(hash % vector.size)
-        val sign = if ((hash and 1) == 0) 1f else -1f
-        vector[index] += sign * weight
     }
 }
 

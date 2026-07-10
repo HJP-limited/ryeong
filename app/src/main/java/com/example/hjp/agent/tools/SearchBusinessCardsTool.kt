@@ -38,7 +38,11 @@ class SearchBusinessCardsTool(
         val query = args.optString("query").trim()
         if (query.isBlank()) return@withContext ToolResults.error("query is required.")
         val limit = args.optInt("limit", 5).coerceIn(1, 10)
-        val response = searchService.search(query, limit)
+        val response = try {
+            searchService.search(query, limit)
+        } catch (e: Throwable) {
+            return@withContext ToolResults.error(e.message ?: e.javaClass.simpleName)
+        }
         JSONObject()
             .put("status", "success")
             .put("message", "Found ${response.results.size} business cards.")

@@ -111,7 +111,15 @@ fun AgentTestScreen(
             Button(onClick = {
                 scope.launch {
                     result = withContext(Dispatchers.IO) {
-                        searchService.search(query, 5).toJson().toString(2)
+                        try {
+                            searchService.search(query, 5).toJson().toString(2)
+                        } catch (e: Throwable) {
+                            JSONObject()
+                                .put("status", "error")
+                                .put("message", e.message ?: e.javaClass.simpleName)
+                                .put("diagnostics", searchService.diagnostics())
+                                .toString(2)
+                        }
                     }
                 }
             }) {
