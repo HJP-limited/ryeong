@@ -15,7 +15,7 @@ class SearchBusinessCardsTool(
         """
         {
           "name": "search_business_cards",
-          "description": "Search the local on-device business card database with Room FTS plus EmbeddingGemma semantic retrieval. Use this before composing emails, SMS, or calendar events involving a contact.",
+          "description": "Search the local on-device business card database with Room FTS plus on-device semantic retrieval. Use this before composing emails, SMS, or calendar events involving a contact.",
           "parameters": {
             "type": "object",
             "properties": {

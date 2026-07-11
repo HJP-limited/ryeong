@@ -36,6 +36,26 @@ public abstract class BusinessCardDao {
         rebuildFts();
     }
 
+    @Query("DELETE FROM business_cards")
+    abstract void clearCards();
+
+    @Query("DELETE FROM card_embeddings")
+    abstract void clearEmbeddings();
+
+    /** 기존 명함·임베딩을 모두 지우고 새 목록으로 교체한다 (JSON 데이터 임포트용). */
+    @Transaction
+    public void replaceAllCards(List<BusinessCardEntity> cards) {
+        clearCards();
+        clearEmbeddings();
+        for (BusinessCardEntity card : cards) {
+            upsertCard(card);
+        }
+        rebuildFts();
+    }
+
+    @Query("SELECT COUNT(*) FROM card_embeddings WHERE modelName = :modelName")
+    public abstract int countEmbeddingsForModel(String modelName);
+
     @Transaction
     public void rebuildFts() {
         clearFts();

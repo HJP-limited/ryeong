@@ -56,8 +56,11 @@ public class BusinessCardEntity {
     }
 
     public String searchableText() {
+        // 하이픈 없이 친 전화번호("01012345678")로도 찾을 수 있게 숫자만 남긴 사본을 함께 인덱싱한다
+        String phoneDigits = phone.replaceAll("[^0-9]", "");
         String source = name + " " + nameEn + " " + company + " " + title + " " + department + " "
-                + industry + " " + location + " " + phone + " " + email + " " + address + " " + memo + " " + tags;
+                + industry + " " + location + " " + phone + " " + phoneDigits + " "
+                + email + " " + address + " " + memo + " " + tags;
         String normalized = normalizeSearchText(source);
         return source.toLowerCase() + " " + normalized + " " + hangulBigrams(normalized);
     }

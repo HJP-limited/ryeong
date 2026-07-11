@@ -29,3 +29,4 @@ app/src/main/assets/tokenizer/*
 tokenizer.json
 tokenizer.model
 tokenizer_config.json
+.kotlin/

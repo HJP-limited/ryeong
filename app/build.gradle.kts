@@ -64,6 +64,10 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation("androidx.room:room-runtime:2.6.1")
     annotationProcessor("androidx.room:room-compiler:2.6.1")
-    implementation("com.google.mediapipe:tasks-text:0.10.14")
+    // EmbeddingGemma 실행용 공식 SDK — MediaPipe TextEmbedder는 이 모델을 못 읽는다 (메타데이터 없음)
+    implementation("com.google.ai.edge.localagents:localagents-rag:0.3.0")
+    // localagents-rag의 내부 proto 클래스가 이걸 필요로 하는데 SDK의 POM에 선언이 빠져 있어 직접 추가해야 한다
+    // (NoClassDefFoundError: Lcom/google/protobuf/GeneratedMessageLite;)
+    implementation("com.google.protobuf:protobuf-javalite:4.35.1")
     implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
 }

@@ -1,8 +1,10 @@
 package com.example.hjp.search
 
 import android.content.Context
+import com.google.ai.edge.localagents.rag.models.EmbedData
+import com.google.ai.edge.localagents.rag.models.EmbeddingRequest
+import com.google.ai.edge.localagents.rag.models.GemmaEmbeddingModel
 import java.io.File
-import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -12,150 +14,99 @@ interface TextEmbeddingProvider {
     val name: String
     val isModelBacked: Boolean
     val diagnosticStatus: String
-    fun embed(text: String): FloatArray
+
+    /** 검색 질의를 임베딩한다. EmbeddingGemma의 query 프롬프트 형식이 자동 적용된다. */
+    fun embedQuery(text: String): FloatArray
+
+    /** 저장할 문서(명함)를 임베딩한다. document 프롬프트 형식이 자동 적용된다. */
+    fun embedDocument(text: String): FloatArray
+
+    fun close() {}
 }
 
-class MediaPipeEmbeddingGemmaProvider(context: Context) : TextEmbeddingProvider {
+/**
+ * EmbeddingGemma 300M을 AI Edge RAG SDK(GemmaEmbeddingModel)로 실행한다.
+ *
+ * 필요한 파일 2개 (files/models 또는 외부 앱 폴더 models/):
+ * - embeddinggemma-300m.tflite  (litert-community 양자화 모델)
+ * - sentencepiece.model         (같은 저장소의 토크나이저)
+ *
+ * MediaPipe TextEmbedder는 이 모델에 필요한 메타데이터가 없어 로드하지 못한다
+ * ("could not build model from the provided pre-loaded flatbuffer").
+ */
+class GemmaEmbeddingProvider(context: Context) : TextEmbeddingProvider {
     private val appContext = context.applicationContext
-    private var textEmbedder: Any? = null
-    private var status = "model asset not found"
-    private val modelFile = findModelFile()
-    private val modelAssetName = if (modelFile == null) {
-        listOf("embeddinggemma_quant.tflite", "embeddinggemma.task").firstOrNull { assetExists(it) }
-    } else {
-        null
-    }
+    private var model: GemmaEmbeddingModel? = null
+    private var status = "not initialized"
+
+    private val modelFile = findFile(MODEL_FILE_NAME)
+    private val tokenizerFile = findFile(TOKENIZER_FILE_NAME)
 
     override val name: String
-        get() = "EmbeddingGemma MediaPipe (${modelFile?.name ?: modelAssetName ?: status})"
+        get() = "EmbeddingGemma RAG (${modelFile?.name ?: "no model"})"
 
     override val isModelBacked: Boolean
-        get() = textEmbedder != null
+        get() = model != null
 
     override val diagnosticStatus: String
         get() = status
 
     init {
         when {
-            modelFile != null -> setup(modelFile)
-            modelAssetName != null -> setupAsset(modelAssetName)
-            else -> status = "missing: ${expectedModelLocations().joinToString(" | ")}"
+            modelFile == null -> status = "missing: $MODEL_FILE_NAME — ${expectedLocations(MODEL_FILE_NAME).joinToString(" | ")}"
+            tokenizerFile == null -> status = "missing: $TOKENIZER_FILE_NAME — ${expectedLocations(TOKENIZER_FILE_NAME).joinToString(" | ")}"
+            else -> try {
+                // GPU 초기화는 기기별 편차가 커서 CPU로 고정. seq256 문장 하나는 CPU로도 수십 ms 수준.
+                model = GemmaEmbeddingModel(modelFile.absolutePath, tokenizerFile.absolutePath, false)
+                status = "loaded from ${modelFile.absolutePath}"
+            } catch (e: Throwable) {
+                model = null
+                status = "load failed: ${describeThrowable(e)}"
+            }
         }
     }
 
-    override fun embed(text: String): FloatArray {
-        val embedder = textEmbedder ?: throw IllegalStateException("EmbeddingGemma is not loaded: $status")
+    override fun embedQuery(text: String): FloatArray =
+        run(EmbedData.create(text, EmbedData.TaskType.RETRIEVAL_QUERY, true))
+
+    override fun embedDocument(text: String): FloatArray =
+        run(EmbedData.create(text, EmbedData.TaskType.RETRIEVAL_DOCUMENT, false))
+
+    private fun run(data: EmbedData<String>): FloatArray {
+        val embedder = model ?: throw IllegalStateException("EmbeddingGemma is not loaded: $status")
         return try {
-            val result = embedder.javaClass.getMethod("embed", String::class.java).invoke(embedder, text)
-            val embeddingResult = result.javaClass.getMethod("embeddingResult").invoke(result)
-            val embeddings = embeddingResult.javaClass.getMethod("embeddings").invoke(embeddingResult) as List<*>
-            val first = embeddings.firstOrNull() ?: return FloatArray(0)
-            val values = first.javaClass.getMethod("floatEmbedding").invoke(first)
-            val vector = when (values) {
-                is FloatArray -> values
-                is List<*> -> FloatArray(values.size) { (values[it] as Number).toFloat() }
-                else -> FloatArray(0)
-            }
-            normalize(vector)
+            val values = embedder.getEmbeddings(EmbeddingRequest.create(listOf(data))).get()
+            normalize(FloatArray(values.size) { values[it] })
         } catch (e: Throwable) {
-            status = "embed failed: ${e.javaClass.simpleName}"
+            status = "embed failed: ${describeThrowable(e)}"
             throw IllegalStateException(status, e)
         }
     }
 
-    private fun setupAsset(assetName: String) {
-        try {
-            val baseOptionsClass = Class.forName("com.google.mediapipe.tasks.core.BaseOptions")
-            val baseOptionsBuilder = baseOptionsClass.getMethod("builder").invoke(null)
-            baseOptionsBuilder.javaClass
-                .getMethod("setModelAssetPath", String::class.java)
-                .invoke(baseOptionsBuilder, assetName)
-            val baseOptions = baseOptionsBuilder.javaClass.getMethod("build").invoke(baseOptionsBuilder)
-                ?: throw IllegalStateException("BaseOptions build returned null")
-            setupWithBaseOptions(baseOptions, baseOptionsClass)
-            status = "loaded from asset $assetName"
-        } catch (e: Throwable) {
-            textEmbedder = null
-            status = "load failed from asset: ${describeThrowable(e)}"
-        }
-    }
+    private fun findFile(fileName: String): File? =
+        expectedFiles(fileName).firstOrNull { it.exists() && it.length() > 0L }
 
-    private fun setup(modelFile: File) {
-        try {
-            val baseOptionsClass = Class.forName("com.google.mediapipe.tasks.core.BaseOptions")
-            val baseOptionsBuilder = baseOptionsClass.getMethod("builder").invoke(null)
-            baseOptionsBuilder.javaClass
-                .getMethod("setModelAssetBuffer", ByteBuffer::class.java)
-                .invoke(baseOptionsBuilder, readDirectBuffer(modelFile))
-            val baseOptions = baseOptionsBuilder.javaClass.getMethod("build").invoke(baseOptionsBuilder)
-                ?: throw IllegalStateException("BaseOptions build returned null")
-            setupWithBaseOptions(baseOptions, baseOptionsClass)
-            status = "loaded from ${modelFile.absolutePath}"
-        } catch (e: Throwable) {
-            textEmbedder = null
-            status = "load failed from file: ${describeThrowable(e)}"
-        }
-    }
-
-    private fun setupWithBaseOptions(baseOptions: Any, baseOptionsClass: Class<*>) {
-        val optionsClass = Class.forName(
-            "com.google.mediapipe.tasks.text.textembedder.TextEmbedder\$TextEmbedderOptions"
-        )
-        val optionsBuilder = optionsClass.getMethod("builder").invoke(null)
-        optionsBuilder.javaClass
-            .getMethod("setBaseOptions", baseOptionsClass)
-            .invoke(optionsBuilder, baseOptions)
-        val options = optionsBuilder.javaClass.getMethod("build").invoke(optionsBuilder)
-
-        val textEmbedderClass = Class.forName("com.google.mediapipe.tasks.text.textembedder.TextEmbedder")
-        textEmbedder = textEmbedderClass
-            .getMethod("createFromOptions", Context::class.java, optionsClass)
-            .invoke(null, appContext, options)
-    }
-
-    private fun assetExists(name: String): Boolean =
-        try {
-            appContext.assets.open(name).close()
-            true
-        } catch (_: Throwable) {
-            false
-        }
-
-    private fun findModelFile(): File? =
-        expectedModelFiles().firstOrNull { it.exists() && it.length() > 0L }
-
-    private fun expectedModelFiles(): List<File> {
+    private fun expectedFiles(fileName: String): List<File> {
         val external = appContext.getExternalFilesDir("models")
         return listOfNotNull(
-            File(File(appContext.filesDir, "models"), "embeddinggemma_quant.tflite"),
-            File(File(appContext.filesDir, "models"), "embeddinggemma.task"),
-            external?.let { File(it, "embeddinggemma_quant.tflite") },
-            external?.let { File(it, "embeddinggemma.task") },
+            File(File(appContext.filesDir, "models"), fileName),
+            external?.let { File(it, fileName) },
         )
     }
 
-    private fun expectedModelLocations(): List<String> =
-        expectedModelFiles().map { it.absolutePath }
-
-    private fun readDirectBuffer(file: File): ByteBuffer {
-        val buffer = ByteBuffer.allocateDirect(file.length().toInt()).order(ByteOrder.nativeOrder())
-        FileInputStream(file).use { input ->
-            val bytes = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(bytes)
-                if (read < 0) break
-                buffer.put(bytes, 0, read)
-            }
-        }
-        buffer.rewind()
-        return buffer
-    }
+    private fun expectedLocations(fileName: String): List<String> =
+        expectedFiles(fileName).map { it.absolutePath }
 
     private fun describeThrowable(error: Throwable): String {
         val chain = generateSequence(error) { it.cause }.take(4).toList()
         return chain.joinToString(" -> ") { item ->
             item.javaClass.simpleName + item.message?.let { ": $it" }.orEmpty()
         }
+    }
+
+    companion object {
+        const val MODEL_FILE_NAME = "embeddinggemma-300m.tflite"
+        const val TOKENIZER_FILE_NAME = "sentencepiece.model"
     }
 }
 

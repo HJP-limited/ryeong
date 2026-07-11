@@ -12,32 +12,32 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = PastelBlue,
+    onPrimary = NavyDeep,
+    primaryContainer = NavyPrimary,
+    onPrimaryContainer = MistBlue,
+    secondary = PastelBlueSoft,
+    onSecondary = NavyDeep,
+    tertiary = SlateBlue,
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    primary = NavyPrimary,
+    onPrimary = androidx.compose.ui.graphics.Color.White,
+    primaryContainer = MistBlue,
+    onPrimaryContainer = NavyDeep,
+    secondary = SlateBlue,
+    onSecondary = androidx.compose.ui.graphics.Color.White,
+    secondaryContainer = MistBlue,
+    onSecondaryContainer = NavyDeep,
+    tertiary = PastelBlue,
 )
 
 @Composable
 fun HJPTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    // 기기 배경화면 색을 따라가면 앱 고유 남색이 묻히므로 끈다
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

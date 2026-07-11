@@ -12,9 +12,9 @@ $adb = Join-Path $env:ANDROID_HOME "platform-tools\adb.exe"
 & $adb install -r app\build\outputs\apk\debug\app-debug.apk
 & $adb shell mkdir -p /sdcard/Android/data/com.example.hjp/files/models
 
-$embedding = Join-Path $repo "..\models\legacy\embeddinggemma_quant.tflite"
+$embedding = Join-Path $repo "..\models\legacy\embeddinggemma-300m.tflite"
 if (Test-Path $embedding) {
-    & $adb push $embedding /sdcard/Android/data/com.example.hjp/files/models/embeddinggemma_quant.tflite
+    & $adb push $embedding /sdcard/Android/data/com.example.hjp/files/models/embeddinggemma-300m.tflite
 } else {
     Write-Warning "EmbeddingGemma model not found at $embedding"
 }
@@ -24,6 +24,13 @@ if (Test-Path $functionGemma) {
     & $adb push $functionGemma /sdcard/Android/data/com.example.hjp/files/models/functiongemma_270m.litertlm
 } else {
     Write-Warning "FunctionGemma model not found at $functionGemma. Put it there or push it manually."
+}
+
+$chatGemma = Join-Path $repo "..\models\gemma3-1b-it-int4.litertlm"
+if (Test-Path $chatGemma) {
+    & $adb push $chatGemma /sdcard/Android/data/com.example.hjp/files/models/gemma3-1b-it-int4.litertlm
+} else {
+    Write-Warning "Gemma 3 1B IT model not found at $chatGemma. Put it there or push it manually."
 }
 
 & $adb shell am start -n com.example.hjp/.MainActivity
