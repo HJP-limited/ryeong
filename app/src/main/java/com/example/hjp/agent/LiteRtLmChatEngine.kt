@@ -90,9 +90,16 @@ class LiteRtLmChatEngine private constructor(
             val model = locateModel(context, role)
                 ?: throw IllegalStateException("${role.displayName} model not found. Put it at app/src/main/assets/${role.assetPath} or files/models/${role.fileNames.joinToString(" | ")}.")
             Engine.setNativeMinLogSeverity(LogSeverity.ERROR)
+            var gpuEngine: LiteRtLmChatEngine? = null
             return try {
-                create(context, model.absolutePath, Backend.GPU(), "GPU", model.name)
+                gpuEngine = create(context, model.absolutePath, Backend.GPU(), "GPU", model.name)
+                // 일부 기기(특히 삼성)는 OpenCL 라이브러리가 없어도 엔진 초기화는 통과하고
+                // 실제 생성(sendMessage) 시점에야 실패한다 — 그래서 초기화 성공만으로는 GPU가
+                // 진짜 되는지 알 수 없어 짧은 시험 생성으로 확인한다.
+                gpuEngine.generate("Hi")
+                gpuEngine
             } catch (gpuError: Throwable) {
+                gpuEngine?.close()
                 create(context, model.absolutePath, Backend.CPU(), "CPU fallback after ${gpuError.javaClass.simpleName}", model.name)
             }
         }
