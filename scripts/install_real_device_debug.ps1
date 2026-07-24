@@ -26,11 +26,11 @@ if (Test-Path $functionGemma) {
     Write-Warning "FunctionGemma model not found at $functionGemma. Put it there or push it manually."
 }
 
-$chatGemma = Join-Path $repo "..\models\gemma3-1b-it-int4.litertlm"
+$chatGemma = Join-Path $repo "..\models\gemma-4-E2B-it.litertlm"
 if (Test-Path $chatGemma) {
-    & $adb push $chatGemma /sdcard/Android/data/com.example.hjp/files/models/gemma3-1b-it-int4.litertlm
+    & $adb push $chatGemma /sdcard/Android/data/com.example.hjp/files/models/gemma-4-E2B-it.litertlm
 } else {
-    Write-Warning "Gemma 3 1B IT model not found at $chatGemma. Put it there or push it manually."
+    Write-Warning "Gemma 4 E2B IT model not found at $chatGemma. Put it there or push it manually."
 }
 
 & $adb shell am start -n com.example.hjp/.MainActivity

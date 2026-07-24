@@ -48,6 +48,10 @@ FunctionGemma 270M is explicitly documented as "not intended for use as a direct
 
 `ModelsScreen` now manages 3 models (embedding / Tool LLM / Chat LLM) with separate status panels, import buttons, and smoke-test buttons.
 
+## Chat model swapped to Gemma 4 E2B (2026-07-23)
+
+`LlmRole.Chat` primary file changed from `gemma3-1b-it-int4.litertlm` (529MB) to `gemma-4-E2B-it.litertlm` (2.5GB), sourced from `litert-community/gemma-4-E2B-it-litert-lm` (generic build, no chipset suffix — same selection rationale as EmbeddingGemma). Unlike Gemma 3 1B, this repo is **not gated** and downloaded without an access request. Old Gemma 3 files stay in `LlmRole.Chat.fileNames` as fallback for devices that can't load the larger model. See `MODEL_SETUP_STATUS.md` for the memory tradeoff this reintroduces.
+
 ## Notes
 
 - Do not merge or touch `main`.

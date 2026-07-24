@@ -15,11 +15,11 @@ enum class LlmRole(val fileNames: List<String>, val assetPath: String, val displ
         displayName = "FunctionGemma 270M",
     ),
 
-    // 후보 순서대로 찾는다: 1B(고성능, RAM 8GB+ 기기) -> 270M IT(저사양 기기용 경량)
+    // 후보 순서대로 찾는다: Gemma 4 E2B(최우선, RAM 8GB+ 기기) -> Gemma 3 1B -> Gemma 3 270M IT(저사양 기기용 경량)
     Chat(
-        fileNames = listOf("gemma3-1b-it-int4.litertlm", "gemma3-270m-it-q8.litertlm"),
-        assetPath = "gemma/gemma3-1b-it-int4.litertlm",
-        displayName = "Chat Gemma",
+        fileNames = listOf("gemma-4-E2B-it.litertlm", "gemma3-1b-it-int4.litertlm", "gemma3-270m-it-q8.litertlm"),
+        assetPath = "gemma/gemma-4-E2B-it.litertlm",
+        displayName = "Chat Gemma 4 E2B",
     ),
     ;
 
@@ -32,25 +32,58 @@ class LiteRtLmChatEngine private constructor(
     val loadedFileName: String,
 ) : AutoCloseable {
 
-    /** 질문마다 새 대화 세션을 만들어 이전 대화의 KV 캐시가 누적되지 않게 한다. */
+    // 채팅 탭 전용 지속 대화 세션. 한 번 만들면 여러 턴에 걸쳐 유지되어
+    // 모델이 이전 질문/답변을 기억한다(멀티턴). 단발성 generate()와 분리한다.
+    private var chatConversation: Conversation? = null
+
+    /**
+     * 대화 맥락을 유지하며 답변을 생성한다. 같은 세션 동안 이전 턴을 기억한다.
+     * 누적된 KV 캐시가 한도(maxNumTokens)를 넘어 생성이 실패하면 대화를 리셋하고
+     * 이번 질문만 새 세션으로 한 번 재시도한다 — 이전 기억은 잃지만 앱은 죽지 않게.
+     */
+    @Synchronized
+    fun generateWithHistory(prompt: String): String {
+        val conversation = chatConversation ?: engine.createConversation().also { chatConversation = it }
+        return try {
+            finishGenerate(conversation.sendMessage(prompt))
+        } catch (_: Throwable) {
+            resetChat()
+            val fresh = engine.createConversation().also { chatConversation = it }
+            finishGenerate(fresh.sendMessage(prompt))
+        }
+    }
+
+    /** 맥락 없는 단발성 생성(스모크 테스트 등). 채팅 대화 세션을 건드리지 않는다. */
     @Synchronized
     fun generate(prompt: String): String {
         val conversation = engine.createConversation()
         try {
-            val response = conversation.sendMessage(prompt)
-            // FunctionGemma처럼 대화용이 아닌 모델은 <pad> 같은 특수 토큰만 뱉기도 한다 — 걸러낸다
-            val cleaned = response?.toString().orEmpty()
-                .replace(Regex("<pad>|<eos>|<bos>|<end_of_turn>|<start_of_turn>|<unk>"), "")
-                .trim()
-            // 소형 모델이 같은 문자열을 무한 반복하는 degenerate 출력도 무효 처리한다 ("</h4></h4>..." 등)
-            if (Regex("(.{3,40})\\1{4,}").containsMatchIn(cleaned)) return EMPTY_RESPONSE
-            return cleaned.ifBlank { EMPTY_RESPONSE }
+            return finishGenerate(conversation.sendMessage(prompt))
         } finally {
             conversation.close()
         }
     }
 
+    /** 채팅 대화를 처음부터 다시 시작한다(이전 기억 삭제). "새 대화" 버튼이 호출. */
+    @Synchronized
+    fun resetChat() {
+        chatConversation?.close()
+        chatConversation = null
+    }
+
+    private fun finishGenerate(response: Any?): String {
+        // FunctionGemma처럼 대화용이 아닌 모델은 <pad> 같은 특수 토큰만 뱉기도 한다 — 걸러낸다
+        val cleaned = response?.toString().orEmpty()
+            .replace(Regex("<pad>|<eos>|<bos>|<end_of_turn>|<start_of_turn>|<unk>"), "")
+            .trim()
+        // 소형 모델이 같은 문자열을 무한 반복하는 degenerate 출력도 무효 처리한다 ("</h4></h4>..." 등)
+        if (Regex("(.{3,40})\\1{4,}").containsMatchIn(cleaned)) return EMPTY_RESPONSE
+        return cleaned.ifBlank { EMPTY_RESPONSE }
+    }
+
     override fun close() {
+        chatConversation?.close()
+        chatConversation = null
         engine.close()
     }
 
@@ -64,6 +97,15 @@ class LiteRtLmChatEngine private constructor(
 
         fun modelStatus(context: Context, role: LlmRole): String =
             locateModel(context, role)?.absolutePath ?: "missing: ${expectedModelLocations(context, role).joinToString(" | ")}"
+
+        /**
+         * 이미 로드된 공유 엔진이 있으면 그 채팅 대화 세션만 초기화한다(멀티턴 기억 삭제).
+         * 엔진이 아직 로드되지 않았으면 아무 것도 하지 않는다 — 리셋하려다 모델을 새로 로드하지 않게.
+         */
+        @Synchronized
+        fun resetSharedChat() {
+            shared?.resetChat()
+        }
 
         /**
          * 공유 엔진을 돌려준다. 같은 모델이면 이미 로드된 엔진을 재사용하고,
@@ -134,9 +176,12 @@ class LiteRtLmChatEngine private constructor(
                 modelPath = modelPath,
                 backend = backend,
                 cacheDir = context.cacheDir.absolutePath,
-                // KV 캐시 메모리를 미리 크게 잡다가 저사양 기기에서 죽는 것을 막는다.
-                // 프롬프트(명함 3장 ~300토큰) + 답변(~300토큰)이면 충분.
-                maxNumTokens = 640,
+                // 멀티턴 기억을 담을 수 있도록 KV 캐시를 잡는다. 한 턴이 명함 컨텍스트(~300)
+                // + 질문 + 답변(~300)으로 ~650토큰이라, 2048이면 직전 1~2턴을 기억한다.
+                // 더 키우면 기억은 늘지만 KV 캐시를 미리 크게 잡아 저사양 기기에서 죽을 위험이 커진다
+                // (RAM 4GB S8이 이 이유로 실패했었음 — 8GB 기기 기준값). 한도 초과 시
+                // generateWithHistory()가 대화를 리셋하고 재시도하므로 앱이 죽지는 않는다.
+                maxNumTokens = 2048,
             )
             val engine = Engine(config)
             engine.initialize()

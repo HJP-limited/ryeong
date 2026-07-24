@@ -20,7 +20,7 @@ $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"; .\gradlew.bat :a
 ## 기술 스택 (팀 결정사항)
 
 - 에이전트: Single ReAct Agent, 도구 9개 예정
-- 온디바이스 LLM: Gemma 4 E2B (LiteRT-LM), 임베딩: EmbeddingGemma 300M — **아직 미연동**
+- 온디바이스 LLM: Gemma 4 E2B (LiteRT-LM, `LlmRole.Chat` 1순위 — 2026-07-23 연동, 실기기 검증 전), 임베딩: EmbeddingGemma 300M
 - 검색: 키워드(정형 DB) + 시맨틱(BM25 + Dense + RRF + Reranker) — 다른 팀원 담당
 
 ## 아키텍처: 에이전트 도구 시스템

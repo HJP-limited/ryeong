@@ -84,6 +84,13 @@
 3. Chat LLM 실기기 스모크 테스트 ("Chat LLM 실행 테스트" 버튼)
 4. OCR/KIE 파이프라인 (7월 마일스톤, 별도 트랙)
 
+## 2026-07-23: Chat 모델을 Gemma 4 E2B로 교체
+
+- `LlmRole.Chat` 1순위 파일을 `gemma3-1b-it-int4.litertlm`(529MB) → `gemma-4-E2B-it.litertlm`(2.5GB, `litert-community/gemma-4-E2B-it-litert-lm`, generic 빌드)로 변경. Gemma 3 파일들은 fallback으로 유지(`fileNames` 순서: E2B → 1B → 270M)
+- **주의: 위 "2. LLM 역할 분리" 절에서 정리했던 이유로 Gemma 4 E2B 단일 모델을 한 번 배제한 적 있음** — 그때 근거였던 3.66GB 추정치는 이번에 받은 실제 파일(2.5GB)보다 컸지만, 그래도 기존 Gemma 3 1B(529MB)보다 5배 가까이 큼. S8(RAM 4GB)에서 529MB 모델도 메모리 부족으로 죽었던 전례가 있어 이 교체판은 **RAM 8GB+ 기기에서만 동작할 가능성이 높음** — 실기기 검증 전까지는 가정임
+- Gemma 3 1B와 달리 이 저장소는 gate 없이 바로 다운로드됨 (`gated: false`)
+- 참고: Google이 문서상 공식 프로덕션 경로로 권장하는 건 LiteRT-LM 번들이 아니라 지원 기기의 Android AI Core(Gemini Nano) — 이 프로젝트는 범용 기기 대상이라 LiteRT-LM 번들 방식 유지
+
 ## 알려진 개선 포인트 (다음 작업 후보)
 
 1. **임베딩 프롬프트 프리픽스 미적용**: EmbeddingGemma는 쿼리에 `task: search result | query: `, 문서에 `title: none | text: ` 프리픽스를 붙여야 검색 품질이 제대로 나옴. 지금 `embed(text)`는 원문 그대로 넣고 있어서 retrieval 품질 손해 보는 중 — 쿼리/문서 구분해서 프리픽스 적용 필요 (적용 시 기존 저장된 벡터 전부 재계산 필요)

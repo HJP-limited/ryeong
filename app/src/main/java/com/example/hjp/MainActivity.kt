@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -256,6 +257,8 @@ private fun ChatScreen(
     var input by remember { mutableStateOf("") }
     var asking by remember { mutableStateOf(false) }
     var selectedCard by remember { mutableStateOf<BusinessCardEntity?>(null) }
+    // 직전 답변의 대상 인물(다음 턴에서 "그 사람" 등이 가리킬 대상). 검색 결과 최상위 카드 이름으로 갱신.
+    var focusPerson by remember { mutableStateOf<String?>(null) }
     val messages = remember {
         mutableStateListOf(
             ChatMessage(isUser = false, text = "명함에 대해 문장으로 물어보세요.\n예) \"판교에 있는 AI 개발자 찾아줘\"")
@@ -273,7 +276,29 @@ private fun ChatScreen(
             .imePadding()
             .padding(horizontal = 16.dp),
     ) {
-        Text("채팅", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 12.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("채팅", style = MaterialTheme.typography.titleLarge)
+            // 멀티턴 기억을 초기화하고 대화를 처음부터 다시 시작한다.
+            TextButton(
+                enabled = !asking,
+                onClick = {
+                    messages.clear()
+                    messages.add(
+                        ChatMessage(isUser = false, text = "명함에 대해 문장으로 물어보세요.\n예) \"판교에 있는 AI 개발자 찾아줘\"")
+                    )
+                    focusPerson = null
+                    scope.launch(Dispatchers.IO) { LiteRtLmChatEngine.resetSharedChat() }
+                },
+            ) {
+                Text("새 대화")
+            }
+        }
 
         LazyColumn(
             state = listState,
@@ -309,13 +334,18 @@ private fun ChatScreen(
                 onClick = {
                     val question = input.trim()
                     input = ""
+                    // 새 질문을 추가하기 전에 직전 대화 기록 + 지칭 대상 인물을 캡처한다(멀티턴용).
+                    val history = recentHistory(messages)
+                    val focus = focusPerson
                     messages.add(ChatMessage(isUser = true, text = question))
                     scope.launch {
                         asking = true
                         val result = withContext(Dispatchers.IO) {
-                            runChat(context, searchService, question)
+                            runChat(context, searchService, question, history, focus)
                         }
                         asking = false
+                        // 이번 검색 결과 최상위 카드의 인물을 다음 턴의 지칭 대상으로 갱신.
+                        result.search?.results?.firstOrNull()?.card?.name?.let { focusPerson = it }
                         messages.add(
                             ChatMessage(
                                 isUser = false,
@@ -546,13 +576,13 @@ private fun ModelsScreen(
 
         ModelCard(
             title = "채팅 LLM",
-            subtitle = "Gemma 3 1B IT · gemma3-1b-it-int4.litertlm",
+            subtitle = "Gemma 4 E2B IT · gemma-4-E2B-it.litertlm",
             role = "채팅 탭에서 검색된 명함 내용을 바탕으로 답변 문장을 만드는 모델입니다.",
             state = if (chatLlmStatus.startsWith("missing:")) ModelState.Missing else ModelState.Ready,
             stateLabel = if (chatLlmStatus.startsWith("missing:")) "모델 파일 없음 — 파일을 가져와 주세요" else "파일 있음 — 동작 확인으로 실행을 검사하세요",
             detail = "",
             onImport = {
-                pendingModelFileName = "gemma3-1b-it-int4.litertlm"
+                pendingModelFileName = "gemma-4-E2B-it.litertlm"
                 modelPicker.launch(arrayOf("application/octet-stream", "*/*"))
             },
             checking = chatTesting,
@@ -831,67 +861,157 @@ private fun StatusCard(
     }
 }
 
+/**
+ * 화면의 메시지 목록에서 최근 대화 턴(사용자 질문 + 어시스턴트 답변)을 최대 maxTurns개 뽑는다.
+ * 첫 안내 말풍선(사용자 질문 없이 어시스턴트만 있는 것)은 자연히 제외된다.
+ */
+private fun recentHistory(messages: List<ChatMessage>, maxTurns: Int = 3): List<Pair<String, String>> {
+    val turns = mutableListOf<Pair<String, String>>()
+    var pendingUser: String? = null
+    for (m in messages) {
+        if (m.isUser) {
+            pendingUser = m.text
+        } else if (pendingUser != null) {
+            turns.add(pendingUser!! to m.text)
+            pendingUser = null
+        }
+    }
+    return turns.takeLast(maxTurns)
+}
+
+/**
+ * 멀티턴 RAG 채팅. 업계 표준인 "history-aware query rewriting"으로 구현한다:
+ * 후속 질문("그 사람 직급이 뭐야?")을 검색 전에 대화 기록으로 독립형 질문
+ * ("강건우의 직급이 뭐야?")으로 재작성해서 항상 올바른 명함이 검색되게 한다.
+ * 그냥 대화 세션만 유지하면, 매 턴 새로 검색된 엉뚱한 명함이 컨텍스트로 주입돼
+ * 기억을 덮어버리는 문제가 있었다(실기기에서 확인). 재작성이 그 뿌리를 해결한다.
+ *
+ * @param history 직전 대화 턴들(사용자 질문, 어시스턴트 답변) — 답변 프롬프트의 맥락용.
+ * @param focusPerson 직전 답변의 대상 인물 — "그 사람" 등 대명사가 가리킬 대상.
+ */
 private fun runChat(
     context: Context,
     searchService: CardSearchService,
     question: String,
+    history: List<Pair<String, String>>,
+    focusPerson: String?,
 ): ChatResult {
     if (question.isBlank()) return ChatResult("질문을 입력하세요.", null)
-    val search = try {
-        searchService.searchHybrid(question, 5)
-    } catch (e: Throwable) {
-        return ChatResult(
-            answer = "검색 중 문제가 있었습니다.",
-            search = null,
-            error = e.message ?: e.javaClass.simpleName,
-        )
-    }
-    // Gemma 3 1B가 없거나 기기 메모리가 부족한 폰(예: RAM 4GB)에서는 FunctionGemma로 대신 답변한다.
-    // FunctionGemma는 대화용 모델이 아니라 품질이 낮지만, 전체 흐름을 시연하는 데는 충분하다.
+
+    // Chat 모델(Gemma 4 E2B 등)이 없거나 메모리가 부족한 폰에서는 FunctionGemma로 대신 답변한다.
     val role = when {
         !LiteRtLmChatEngine.modelStatus(context, LlmRole.Chat).startsWith("missing:") -> LlmRole.Chat
         !LiteRtLmChatEngine.modelStatus(context, LlmRole.ToolCalling).startsWith("missing:") -> LlmRole.ToolCalling
-        else -> return ChatResult(
+        else -> null
+    }
+
+    // LLM이 아예 없으면 재작성도 불가 — 원문 질문으로 검색만 해서 결과를 보여준다.
+    if (role == null) {
+        val search = runCatching { searchService.searchHybrid(question, 5) }.getOrNull()
+        return ChatResult(
             answer = "LLM 모델이 없어 검색 결과만 보여드려요. 모델 탭에서 LLM 파일을 가져오면 답변도 생성됩니다.",
             search = search,
         )
     }
+
+    val engine = try {
+        LiteRtLmChatEngine.openShared(context, role) // 공유 엔진 — 닫지 않는다(반복 로드 스파이크 방지)
+    } catch (e: Throwable) {
+        val search = runCatching { searchService.searchHybrid(question, 5) }.getOrNull()
+        return ChatResult("LLM 로드에 실패했어요. 검색 결과만 보여드려요.", search, error = e.message ?: e.javaClass.simpleName)
+    }
+    val loadedModel = engine.loadedFileName.removeSuffix(".litertlm")
+
+    // 1) 후속 질문의 대명사("그 사람" 등)를 직전 대화의 대상 인물로 '결정적으로' 치환한다.
+    //    소형 모델의 LLM 재작성은 의도를 왜곡해(예: "어디 살아"→"회사") 불안정했고(실기기 확인),
+    //    대화 기록 텍스트에서 이름을 재추출하면 "전화번호는" 같은 명사를 인물로 오인했다(시뮬 확인).
+    //    그래서 직전 검색 최상위 카드의 '실제 명함 이름'(focusPerson)만 지칭 대상으로 쓴다.
+    val searchQuery = resolveSearchQuery(question, focusPerson)
+
+    // 2) 재작성된 쿼리로 하이브리드 검색.
+    val search = try {
+        searchService.searchHybrid(searchQuery, 5)
+    } catch (e: Throwable) {
+        return ChatResult("검색 중 문제가 있었습니다.", null, error = e.message ?: e.javaClass.simpleName)
+    }
+
+    // 3) 대화 기록 + 검색 컨텍스트 + 원문 질문으로 답변 생성(stateless — 프롬프트에 기록을 명시적으로 넣는다).
     return try {
-        val prompt = """
-            You are an on-device assistant for a business card app.
-            Answer in Korean using only the provided business card context.
-
-            Question:
-            $question
-
-            Business card context:
-            ${search.ragContext(3)}
-        """.trimIndent()
-        // 공유 엔진 사용 — 닫지 않는다 (반복 로드로 인한 메모리 스파이크 방지)
-        val engine = LiteRtLmChatEngine.openShared(context, role)
-        val loadedModel = engine.loadedFileName.removeSuffix(".litertlm")
-        val llmAnswer = engine.generate(prompt)
+        val llmAnswer = engine.generate(buildAnswerPrompt(history, question, search.ragContext(3)))
         if (llmAnswer == LiteRtLmChatEngine.EMPTY_RESPONSE) {
-            return ChatResult(
+            ChatResult(
                 answer = "LLM이 유효한 답변을 만들지 못했어요. 검색 결과를 참고해 주세요." +
                     if (role == LlmRole.ToolCalling) "\n(FunctionGemma는 대화용 모델이 아니라 자주 이렇습니다)" else "",
                 search = search,
                 modelLabel = loadedModel,
             )
+        } else {
+            ChatResult(
+                answer = llmAnswer,
+                search = search,
+                modelLabel = if (role == LlmRole.ToolCalling) "$loadedModel (임시 대체 — 품질 낮음)" else loadedModel,
+            )
         }
-        ChatResult(
-            answer = llmAnswer,
-            search = search,
-            modelLabel = if (role == LlmRole.ToolCalling) "$loadedModel (임시 대체 — 품질 낮음)" else loadedModel,
-        )
     } catch (e: Throwable) {
-        // 검색은 이미 성공했으니 결과는 보여주고, LLM 답변 생성만 실패했다고 알린다.
         ChatResult(
             answer = "LLM 답변 생성에 실패했어요. 검색 결과는 아래에서 확인할 수 있습니다.",
             search = search,
             error = e.message ?: e.javaClass.simpleName,
         )
     }
+}
+
+/** 최근 대화 기록을 붙인 텍스트("사용자: ... / 어시스턴트: ...") — 프롬프트 삽입용. */
+private fun formatHistory(history: List<Pair<String, String>>): String =
+    history.joinToString("\n") { (q, a) -> "사용자: $q\n어시스턴트: $a" }
+
+// 후속 질문임을 나타내는 대명사/지시 표현들. 이게 있을 때 직전 인물로 치환한다.
+private val FOLLOWUP_PRONOUNS = listOf(
+    "그 사람", "그사람", "그 분", "그분", "이 사람", "이사람", "저 사람", "저사람",
+    "그 사람의", "걔", "그 회사", "그회사", "방금 그", "그 명함", "이 분", "이분",
+)
+
+// 속성 명사로 시작하는 생략형 후속("메일은?", "직급은?")도 직전 인물에 대한 질문으로 본다.
+// 반대로 새 이름으로 시작하면("옹현은…", "홍길동은…") 새 인물로 보고 focus를 붙이지 않는다.
+private val ATTRIBUTE_NOUNS = listOf(
+    "전화번호", "전화", "번호", "연락처", "핸드폰", "휴대폰", "메일", "이메일",
+    "직급", "직함", "직책", "회사", "소속", "주소", "위치", "지역", "부서", "이름",
+)
+
+/**
+ * 후속 질문의 검색 쿼리를 만든다. 대명사가 있고 직전 대화의 대상 인물(focusPerson)이 있으면
+ * 그 이름으로 치환한다. focusPerson은 직전 검색 결과 최상위 카드의 '실제 명함 이름'이라,
+ * 기록 텍스트에서 정규식으로 이름을 재추출할 때 생기던 오인("전화번호는"→인물)이 없다.
+ * 이름이 이미 있는 질문(대명사 없음)은 그대로 둔다 — 의도 왜곡 없이 정확히 검색되게.
+ */
+private fun resolveSearchQuery(question: String, focusPerson: String?): String {
+    if (focusPerson == null) return question
+    val hasPronoun = FOLLOWUP_PRONOUNS.any { question.contains(it) }
+    val isElliptical = ATTRIBUTE_NOUNS.any { question.trimStart().startsWith(it) }
+    // 대명사도 없고 속성 명사로 시작하지도 않으면 새 인물/독립 질문 — 그대로 둔다.
+    if (!hasPronoun && !isElliptical) return question
+    var q = question
+    for (p in FOLLOWUP_PRONOUNS) q = q.replace(p, focusPerson)
+    // 대명사 치환이 없었으면(생략형 후속) 이름을 앞에 붙여 focus 인물로 검색되게 한다.
+    return if (q != question) q else "$focusPerson $question"
+}
+
+/** 검색 컨텍스트 + 대화 기록 + 원문 질문으로 최종 답변을 만드는 프롬프트. */
+private fun buildAnswerPrompt(history: List<Pair<String, String>>, question: String, ragContext: String): String {
+    val historyBlock = if (history.isEmpty()) "" else "이전 대화:\n${formatHistory(history)}\n\n"
+    return """
+        You are an on-device assistant for a business card app.
+        Answer in Korean using only the business card context below.
+        - "그 사람" 같은 표현은 이전 대화에서 다룬 인물을 가리킨다. 그 인물 기준으로 답하라.
+        - 컨텍스트에 이름이 비슷한 사람이 여러 명 있어도, 이전 대화의 인물과 일치하는 사람을 골라 답하라.
+        - 되묻지 말고, 컨텍스트에 답이 있으면 바로 답하라. 정말 없을 때만 없다고 말하라.
+
+        ${historyBlock}명함 컨텍스트:
+        $ragContext
+
+        질문:
+        $question
+    """.trimIndent()
 }
 
 private fun runLlmSmokeTest(context: Context, role: LlmRole): String =

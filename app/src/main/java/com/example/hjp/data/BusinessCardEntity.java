@@ -73,6 +73,9 @@ public class BusinessCardEntity {
                 + "department: " + department + "\n"
                 + "industry: " + industry + "\n"
                 + "location: " + location + "\n"
+                + "phone: " + phone + "\n"
+                + "email: " + email + "\n"
+                + "address: " + address + "\n"
                 + "memo: " + memo + "\n"
                 + "tags: " + tags;
     }

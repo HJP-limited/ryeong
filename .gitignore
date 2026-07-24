@@ -30,3 +30,7 @@ tokenizer.json
 tokenizer.model
 tokenizer_config.json
 .kotlin/
+
+# Python 캐시
+__pycache__/
+*.pyc
