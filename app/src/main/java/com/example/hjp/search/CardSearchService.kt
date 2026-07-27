@@ -9,6 +9,57 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.system.measureTimeMillis
 
+// FTS4 MATCH 쿼리 문자열 빌더 — 검색 담당 브랜치의 Fts4QueryBuilder 이식.
+private val ftsUnsafeChars = Regex("[^\\p{L}\\p{N}]+")
+private val ftsOperators = setOf("AND", "OR", "NOT", "NEAR")
+
+private fun ftsSafeTerms(tokens: List<String>): List<String> =
+    tokens.map { it.replace(ftsUnsafeChars, "") }
+        .filter { it.isNotBlank() && it.uppercase() !in ftsOperators }
+
+/** 정확 구문 매치(어순·인접 그대로) — 가장 정밀. */
+private fun ftsPhraseMatch(terms: List<String>): String? =
+    terms.joinToString(" ").takeIf { it.isNotBlank() }?.let { "\"$it\"" }
+
+/** 전체 단어 AND(어순 무관, 인접 불필요). */
+private fun ftsAllTermsMatch(terms: List<String>): String? =
+    terms.joinToString(" ").takeIf { it.isNotBlank() }
+
+/** 접두어 AND — "강서연씨"처럼 존칭/조사가 붙어도 접두어로 잡힌다(prefix 인덱스 활용). */
+private fun ftsPrefixMatch(terms: List<String>): String? =
+    terms.filter { it.length >= 2 }
+        .joinToString(" ") { "$it*" }
+        .takeIf { it.isNotBlank() }
+
+// 키워드 동의어 확장 — sojung 브랜치(ymj/embedding-search-android-eval와 같은 분기점) 참고.
+// 키워드는 정확히 그 단어가 있어야만 매치되고 "AI"↔"인공지능" 같은 동의어를 모른다.
+// LIKE 폴백(가장 느슨한 티어)에만 적용해서, 정밀한 ①②③ 티어의 정확도는 그대로 두고
+// 개념형 질의의 재현율만 싸게 보강한다. 임베딩이 이미 하는 일과 겹치지만, 임베딩이 안 뜨는
+// 기기(키워드 전용 폴백)에서도 최소한의 동의어 커버리지를 준다.
+private val SYNONYMS: Map<String, List<String>> = mapOf(
+    "ai" to listOf("ai", "인공지능", "머신러닝", "개발", "연구"),
+    "인공지능" to listOf("ai", "인공지능", "머신러닝", "개발", "연구"),
+    "개발" to listOf("개발", "개발자", "엔지니어", "소프트웨어", "it", "ai"),
+    "디자인" to listOf("디자인", "디자이너", "브랜드", "크리에이티브"),
+    "투자" to listOf("투자", "벤처", "금융", "vc"),
+    "영업" to listOf("영업", "세일즈", "파트너십", "비즈니스"),
+    "마케팅" to listOf("마케팅", "브랜드", "광고", "홍보"),
+    "의료" to listOf("의료", "헬스케어", "제약", "병원"),
+    "대표" to listOf("대표", "ceo", "창업", "창업자"),
+    "변호사" to listOf("변호사", "법무", "법률"),
+    "회계" to listOf("회계", "회계사", "재무", "감사"),
+)
+
+/** LIKE 폴백 전용 — 원래 토큰 + 동의어를 합쳐서 돌려준다(중복 제거, 순서 보존). */
+private fun expandSynonymsForFallback(terms: List<String>): List<String> {
+    val out = LinkedHashSet<String>()
+    for (t in terms) {
+        out.add(t)
+        SYNONYMS[t.lowercase()]?.let { out.addAll(it) }
+    }
+    return out.toList()
+}
+
 data class CardSearchHit(
     val card: BusinessCardEntity,
     val score: Double,
@@ -268,25 +319,27 @@ class CardSearchService(
         )
     }
 
+    /**
+     * 티어드 FTS 검색(검색 담당 브랜치 ymj/embedding-search-android-eval 이식):
+     * 정확 구문(phrase) → 전체 단어 AND(allTerms) → 접두어 AND(prefix) → LIKE 폴백.
+     * 순서대로 후보를 채워 나가고, 그 등장 순서를 그대로 랭킹으로 쓴다(재점수화하지 않음).
+     * scripts/eval_search.py 오프라인 평가에서 기존 LIKE+커스텀 점수 방식보다
+     * Recall@1 0.76→0.94, MRR 0.81→0.96로 뚜렷이 우수했다(특히 전화번호 조회 0.19→1.00).
+     */
     private fun keywordHits(query: AnalyzedSearchQuery, limit: Int): List<CardSearchHit> {
-        val ids = keywordIds(query.ftsTerms, limit * 4)
-        val cards = if (ids.isEmpty() && query.keywordQuery.isBlank()) {
-            dao.allCards()
+        val ids = keywordIdsTiered(query, limit * 4)
+        val ranked = if (ids.isEmpty() && query.keywordQuery.isBlank()) {
+            dao.allCards().map { it.id }
         } else {
-            ids.mapNotNull { dao.findCard(it) }
+            ids
         }
-        return cards
-            .map { card ->
-                val score = KeywordSearchRanker.score(card, query)
-                card to score
-            }
-            .filter { query.keywordQuery.isBlank() || it.second > 0.0 }
-            .sortedWith(compareByDescending<Pair<BusinessCardEntity, Double>> { it.second }.thenBy { it.first.name })
+        return ranked
+            .mapNotNull { dao.findCard(it) }
             .take(limit)
-            .mapIndexed { index, scored ->
+            .mapIndexed { index, card ->
                 CardSearchHit(
-                    card = scored.first,
-                    score = scored.second,
+                    card = card,
+                    score = (limit - index).toDouble(),
                     keywordRank = index + 1,
                     vectorRank = null,
                     similarity = 0f,
@@ -294,22 +347,24 @@ class CardSearchService(
             }
     }
 
-    private fun keywordIds(tokens: List<String>, limit: Int): List<String> {
-        if (tokens.isEmpty()) return dao.allCards().take(limit).map { it.id }
-        val match = tokens
-            .map { it.trim().replace("\"", "\"\"") }
-            .joinToString(" OR ") { "\"$it\"" }
-        val ids = try {
-            if (match.isBlank()) emptyList() else dao.searchFtsIds(match, limit)
+    private fun keywordIdsTiered(query: AnalyzedSearchQuery, limit: Int): List<String> {
+        val terms = ftsSafeTerms(query.keywordTokens)
+        if (terms.isEmpty()) return emptyList()
+        val out = LinkedHashSet<String>()
+        ftsPhraseMatch(terms)?.let { out.addAll(safeFtsSearch(it, limit)) }
+        if (out.size < limit) ftsAllTermsMatch(terms)?.let { out.addAll(safeFtsSearch(it, limit)) }
+        if (out.size < limit) ftsPrefixMatch(terms)?.let { out.addAll(safeFtsSearch(it, limit)) }
+        // LIKE 폴백에서만 동의어 확장 — "인공지능" 검색이 "AI" 태그 카드도 잡게.
+        if (out.size < limit) expandSynonymsForFallback(terms).forEach { out.addAll(dao.searchLikeIds("%$it%", limit)) }
+        return out.take(limit)
+    }
+
+    private fun safeFtsSearch(match: String, limit: Int): List<String> =
+        try {
+            dao.searchFtsIds(match, limit)
         } catch (_: Throwable) {
             emptyList()
         }
-        if (ids.isNotEmpty()) return ids
-        return tokens
-            .flatMap { token -> dao.searchLikeIds("%$token%", limit) }
-            .distinct()
-            .take(limit)
-    }
 
     private fun vectorScores(queryVector: FloatArray, limit: Int): List<Pair<String, Float>> =
         dao.embeddingsForModel(embeddingModelKey)

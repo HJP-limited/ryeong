@@ -4,8 +4,11 @@
 # eval_search.py의 키워드/벡터/RRF 로직을 그대로 재사용한다(드리프트 방지).
 #   실행: (먼저 litert-lm serve 가 9379에 떠 있어야 함) python scripts/hybrid_server.py
 import json
+import os
+import sqlite3
 import struct
 import sys
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,7 +40,9 @@ def resolve_query(question: str, focus):
         return question, False
     trimmed = question.lstrip()
     has_pron = any(p in question for p in PRONOUNS)
-    is_ellip = any(trimmed.startswith(n) for n in ATTRIBUTE_NOUNS)
+    # 질문에 숫자(전화번호 뒷자리 등 새 검색값)가 있으면 생략형으로 보지 않는다.
+    has_new_value = any(ch.isdigit() for ch in question)
+    is_ellip = (not has_new_value) and any(trimmed.startswith(n) for n in ATTRIBUTE_NOUNS)
     if not has_pron and not is_ellip:
         return question, False
     q = question
@@ -48,19 +53,114 @@ def resolve_query(question: str, focus):
     return q, True
 
 
+# HJP_TEST_CARDS=data/cards_test50.json 처럼 지정하면 5000장 대신 소규모 통제 데이터셋을 쓴다.
+# (이름 근사중복이 적어 멀티턴/키워드 테스트 노이즈가 줄어듦 — scripts/generate_test50.py 참고)
+TEST_CARDS_PATH = os.environ.get("HJP_TEST_CARDS")
+
 print("[hybrid] 카드/벡터/모델 로딩 중… (EmbeddingGemma 1.2GB — 30초~1분 걸릴 수 있음)")
-CARDS = json.loads(ev.CARDS_PATH.read_text(encoding="utf-8"))
-CARDS_BY_ID = {c["id"]: c for c in CARDS}
-PREPARED = []
-for c in CARDS:
-    t = ev.card_original_text(c)
-    PREPARED.append((t, set(t.split())))
-IDS = json.loads(ev.IDS_PATH.read_text(encoding="utf-8"))
-_raw = ev.VECTORS_PATH.read_bytes()
-DOC_MAT = np.frombuffer(_raw, dtype="<f4").reshape(len(IDS), ev.DIM).copy()
 from sentence_transformers import SentenceTransformer  # noqa: E402
 MODEL = SentenceTransformer(str(ev.MODEL_PATH))
-print(f"[hybrid] 준비 완료: 카드 {len(CARDS)}장, 벡터 {DOC_MAT.shape}, 서버 :{PORT}")
+
+if TEST_CARDS_PATH:
+    CARDS = json.loads(Path(TEST_CARDS_PATH).read_text(encoding="utf-8"))
+    CARDS_BY_ID = {c["id"]: c for c in CARDS}
+    PREPARED = []
+    for c in CARDS:
+        t = ev.card_original_text(c)
+        PREPARED.append((t, set(t.split())))
+    IDS = [c["id"] for c in CARDS]
+    doc_texts = [ev.card_text(c) if hasattr(ev, "card_text") else ", ".join(
+        c.get(f, "") for f in ["name", "nameEn", "company", "title", "department", "industry", "location", "memo", "tags"] if c.get(f)
+    ) for c in CARDS]
+    DOC_MAT = np.asarray(MODEL.encode_document(doc_texts), dtype="<f4")
+    print(f"[hybrid] 테스트 데이터셋 사용: {TEST_CARDS_PATH} ({len(CARDS)}명, 임베딩 실시간 계산)")
+else:
+    CARDS = json.loads(ev.CARDS_PATH.read_text(encoding="utf-8"))
+    CARDS_BY_ID = {c["id"]: c for c in CARDS}
+    PREPARED = []
+    for c in CARDS:
+        t = ev.card_original_text(c)
+        PREPARED.append((t, set(t.split())))
+    IDS = json.loads(ev.IDS_PATH.read_text(encoding="utf-8"))
+    _raw = ev.VECTORS_PATH.read_bytes()
+    DOC_MAT = np.frombuffer(_raw, dtype="<f4").reshape(len(IDS), ev.DIM).copy()
+
+# 키워드 검색: 저쪽(검색 담당) 방식 = FTS4 unicode61 티어드(phrase→allTerms→prefix→LIKE).
+# eval에서 내 LIKE+점수 방식보다 상위 정확도가 높아(특히 전화번호) 이걸 채택.
+_FTS = sqlite3.connect(":memory:", check_same_thread=False)
+_FTS.execute("CREATE VIRTUAL TABLE fts USING fts4(cardId, text, tokenize=unicode61)")
+_FTS.executemany("INSERT INTO fts(cardId, text) VALUES (?,?)",
+                 [(CARDS[i]["id"], PREPARED[i][0]) for i in range(len(CARDS))])
+_FTS.commit()
+_FTS_LOCK = threading.Lock()
+
+
+def _fts_match(match: str):
+    with _FTS_LOCK:
+        try:
+            return [r[0] for r in _FTS.execute("SELECT cardId FROM fts WHERE text MATCH ?", (match,)).fetchall()]
+        except sqlite3.OperationalError:
+            return []
+
+
+def _query_tokens(query: str):
+    out = []
+    for t in ev.normalize(query).split():
+        if len(t) < 2 or t in ev.STOPWORDS:
+            continue
+        s = ev.strip_particle(t)
+        if len(s) >= 2 and s not in out:
+            out.append(s)
+    return out
+
+
+# 키워드 동의어 확장 — 앱 CardSearchService.kt의 SYNONYMS와 동기화(드리프트 주의).
+# LIKE 폴백(가장 느슨한 티어)에만 적용 — 정밀한 ①②③ 티어는 원래 토큰만 쓴다.
+SYNONYMS = {
+    "ai": ["ai", "인공지능", "머신러닝", "개발", "연구"],
+    "인공지능": ["ai", "인공지능", "머신러닝", "개발", "연구"],
+    "개발": ["개발", "개발자", "엔지니어", "소프트웨어", "it", "ai"],
+    "디자인": ["디자인", "디자이너", "브랜드", "크리에이티브"],
+    "투자": ["투자", "벤처", "금융", "vc"],
+    "영업": ["영업", "세일즈", "파트너십", "비즈니스"],
+    "마케팅": ["마케팅", "브랜드", "광고", "홍보"],
+    "의료": ["의료", "헬스케어", "제약", "병원"],
+    "대표": ["대표", "ceo", "창업", "창업자"],
+    "변호사": ["변호사", "법무", "법률"],
+    "회계": ["회계", "회계사", "재무", "감사"],
+}
+
+
+def _expand_synonyms_for_fallback(terms):
+    out = []
+    for t in terms:
+        if t not in out:
+            out.append(t)
+        for syn in SYNONYMS.get(t.lower(), []):
+            if syn not in out:
+                out.append(syn)
+    return out
+
+
+def keyword_ranking_fts(query: str):
+    toks = _query_tokens(query)
+    if not toks:
+        return []
+    out = []
+    def add(ids):
+        for i in ids:
+            if i not in out:
+                out.append(i)
+    add(_fts_match('"%s"' % " ".join(toks)))          # 1) 정확 구문(인접)
+    add(_fts_match(" ".join(toks)))                    # 2) 전체 단어(AND)
+    add(_fts_match(" ".join(t + "*" for t in toks)))   # 3) 접두어(AND)
+    # 4) LIKE 폴백 — 동의어까지 확장해서 term-by-term으로 처리(순서=우선순위, 앱과 동일하게).
+    for t in _expand_synonyms_for_fallback(toks):
+        add([CARDS[i]["id"] for i in range(len(CARDS)) if t in PREPARED[i][0]])
+    return out
+
+
+print(f"[hybrid] 준비 완료: 카드 {len(CARDS)}장, 벡터 {DOC_MAT.shape}, 키워드=FTS4 티어드, 서버 :{PORT}")
 
 
 def names(id_list, n=5):
@@ -84,6 +184,8 @@ def build_prompt(history, question, ctx):
         "Answer in Korean using only the business card context below.\n"
         '- "그 사람" 같은 표현은 이전 대화에서 다룬 인물을 가리킨다. 그 인물 기준으로 답하라.\n'
         "- 컨텍스트에 이름이 비슷한 사람이 여러 명 있어도, 이전 대화의 인물과 일치하는 사람을 골라 답하라.\n"
+        "- 명함 컨텍스트에 있다고 해서 전부 질문과 관련 있는 건 아니다. 질문과 실제로 관련된\n"
+        "  사람만 답하고, 무관해 보이는 사람은 완전히 무시하라.\n"
         "- 되묻지 말고, 컨텍스트에 답이 있으면 바로 답하라. 정말 없을 때만 없다고 말하라.\n\n"
         f"{hist}명함 컨텍스트:\n{ctx}\n\n질문:\n{question}"
     )
@@ -106,7 +208,7 @@ def run_turn(question, history, focus):
     rq, changed = resolve_query(question, focus)
 
     t0 = time.time()
-    kw = ev.keyword_ranking(CARDS, PREPARED, rq)
+    kw = keyword_ranking_fts(rq)  # 저쪽(검색 담당) FTS4 티어드 방식
     kw_ms = (time.time() - t0) * 1000
 
     t1 = time.time()
@@ -128,7 +230,12 @@ def run_turn(question, history, focus):
         answer, err = "", f"{type(e).__name__}: {e}"
     gen_ms = (time.time() - t2) * 1000
 
-    focus_new = CARDS_BY_ID[hy[0]]["name"] if hy else focus
+    # 질문이 실제로 이름을 지목했으면 그 이름을 우선 지칭 대상으로 삼는다.
+    # 없으면(대명사/생략형 후속) 하이브리드 1등으로 대체 — "1등이면 무조건 focus"였던
+    # 방식은 유사 이름 오매칭 시 focus가 엉뚱한 사람으로 튀는 문제가 있었음(실측 확인).
+    result_names = list(dict.fromkeys(CARDS_BY_ID[cid]["name"] for cid in hy))
+    named_in_question = next((n for n in result_names if n in question), None)
+    focus_new = named_in_question or (result_names[0] if result_names else focus)
     return {
         "answer": answer,
         "error": err,
@@ -141,6 +248,11 @@ def run_turn(question, history, focus):
         "sem_ms": round(sem_ms, 1),
         "gen_ms": round(gen_ms, 1),
         "focus": focus_new,
+        # 조회된 상위 명함(하이브리드 top N)의 필드 — 프런트에서 명함 카드로 렌더링.
+        "cards": [
+            {k: (CARDS_BY_ID[cid].get(k) or "") for k in ("name", "company", "title", "department", "phone", "email", "address", "location")}
+            for cid in top_ids
+        ],
     }
 
 

@@ -344,8 +344,14 @@ private fun ChatScreen(
                             runChat(context, searchService, question, history, focus)
                         }
                         asking = false
-                        // 이번 검색 결과 최상위 카드의 인물을 다음 턴의 지칭 대상으로 갱신.
-                        result.search?.results?.firstOrNull()?.card?.name?.let { focusPerson = it }
+                        // 질문이 실제로 이름을 지목했으면 그 이름을 지칭 대상으로 삼는다(우선).
+                        // 그런 이름이 없으면(대명사/생략형 후속) 검색 1등 카드로 대체 — 새 개념
+                        // 검색("판교 AI개발자 찾아줘")에서도 focus가 정상적으로 잡히게.
+                        // "검색 1등이면 무조건 focus"였던 예전 방식은 유사 이름 오매칭 시
+                        // focus가 엉뚱한 사람으로 튀는 문제가 있었다(실기기에서 발견).
+                        val resultNames = result.search?.results?.map { it.card.name }?.distinct().orEmpty()
+                        val namedInQuestion = resultNames.firstOrNull { name -> question.contains(name) }
+                        (namedInQuestion ?: resultNames.firstOrNull())?.let { focusPerson = it }
                         messages.add(
                             ChatMessage(
                                 isUser = false,
@@ -987,7 +993,10 @@ private val ATTRIBUTE_NOUNS = listOf(
 private fun resolveSearchQuery(question: String, focusPerson: String?): String {
     if (focusPerson == null) return question
     val hasPronoun = FOLLOWUP_PRONOUNS.any { question.contains(it) }
-    val isElliptical = ATTRIBUTE_NOUNS.any { question.trimStart().startsWith(it) }
+    // 질문에 숫자(전화번호 뒷자리 등 새 검색값)가 있으면 생략형으로 보지 않는다 —
+    // "번호 뒷자리 4312인 분"처럼 새 값을 주는 질문을 이전 focus에 억지로 묶으면 안 됨.
+    val hasNewValue = question.any { it.isDigit() }
+    val isElliptical = !hasNewValue && ATTRIBUTE_NOUNS.any { question.trimStart().startsWith(it) }
     // 대명사도 없고 속성 명사로 시작하지도 않으면 새 인물/독립 질문 — 그대로 둔다.
     if (!hasPronoun && !isElliptical) return question
     var q = question
@@ -1004,6 +1013,8 @@ private fun buildAnswerPrompt(history: List<Pair<String, String>>, question: Str
         Answer in Korean using only the business card context below.
         - "그 사람" 같은 표현은 이전 대화에서 다룬 인물을 가리킨다. 그 인물 기준으로 답하라.
         - 컨텍스트에 이름이 비슷한 사람이 여러 명 있어도, 이전 대화의 인물과 일치하는 사람을 골라 답하라.
+        - 명함 컨텍스트에 있다고 해서 전부 질문과 관련 있는 건 아니다. 질문과 실제로
+          관련된 사람만 답하고, 무관해 보이는 사람은 완전히 무시하라.
         - 되묻지 말고, 컨텍스트에 답이 있으면 바로 답하라. 정말 없을 때만 없다고 말하라.
 
         ${historyBlock}명함 컨텍스트:
