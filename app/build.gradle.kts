@@ -56,6 +56,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     testImplementation(libs.junit)
+    // 안드로이드의 org.json 은 단위 테스트에서 스텁("not mocked")이라 그대로는 못 쓴다.
+    // 검색 규칙 테스트가 실제 명함 JSON(data/cards_test.json)을 읽어야 해서 실제 구현을 넣는다.
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -43,9 +43,22 @@ class SearchBusinessCardsTool(
         } catch (e: Throwable) {
             return@withContext ToolResults.error(e.message ?: e.javaClass.simpleName)
         }
+        // 기권(없는 이름/지역/번호)은 '검색 실패'가 아니라 '그런 사람이 없다'는 확정 결과다.
+        // 이 구분을 안 주면 LLM 이 재시도하거나 비슷한 이름의 다른 사람으로 답을 지어낸다
+        // (실측: 없는 사람에 대해 "채용설명회에서 만났습니다"라고 답했다).
+        val message = when {
+            response.abstained ->
+                "No such contact exists. The query names a person, place, or number that is not " +
+                    "in the database. Tell the user it was not found. Do NOT substitute a similar name."
+            response.results.isEmpty() -> "No matching business cards."
+            else -> "Found ${response.results.size} business cards."
+        }
         JSONObject()
             .put("status", "success")
-            .put("message", "Found ${response.results.size} business cards.")
+            .put("message", message)
+            .put("abstained", response.abstained)
+            .put("identifier_routed", response.identifierRouted)
+            .put("field_filters", response.fieldFilters.toString())
             .put("query", response.query)
             .put("engine", response.engine)
             .put("retrieval", response.retrieval)

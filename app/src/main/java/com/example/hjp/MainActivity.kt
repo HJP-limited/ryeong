@@ -57,6 +57,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.example.hjp.agent.AgentSession
+import com.example.hjp.agent.ConversationalFollowup
 import com.example.hjp.agent.LiteRtLmChatEngine
 import com.example.hjp.agent.LlmRole
 import com.example.hjp.data.BusinessCardEntity
@@ -100,6 +102,10 @@ private data class ChatResult(
     val search: CardSearchResponse?,
     val error: String? = null,
     val modelLabel: String? = null,
+    /** 재검색 없이 직전 결과를 근거로 답한 턴인가(정정/확인/복수지시 발화). */
+    val conversationalFollowup: Boolean = false,
+    /** LLM 이 무관하다고 판단해 카드 목록에서 뺀 사람들. */
+    val filteredOut: List<String> = emptyList(),
 )
 
 private data class ChatMessage(
@@ -108,6 +114,8 @@ private data class ChatMessage(
     val modelLabel: String? = null,
     val search: CardSearchResponse? = null,
     val error: String? = null,
+    val conversationalFollowup: Boolean = false,
+    val filteredOut: List<String> = emptyList(),
 )
 
 @Composable
@@ -257,8 +265,9 @@ private fun ChatScreen(
     var input by remember { mutableStateOf("") }
     var asking by remember { mutableStateOf(false) }
     var selectedCard by remember { mutableStateOf<BusinessCardEntity?>(null) }
-    // 직전 답변의 대상 인물(다음 턴에서 "그 사람" 등이 가리킬 대상). 검색 결과 최상위 카드 이름으로 갱신.
-    var focusPerson by remember { mutableStateOf<String?>(null) }
+    // 멀티턴 세션 — 앱 프로세스가 살아있는 동안 하나를 유지한다(운영 아키텍처 규격).
+    // 지칭 대상 인물과 직전 결과 카드는 tool_session_context 에 저장된다.
+    val session = remember { AgentSession() }
     val messages = remember {
         mutableStateListOf(
             ChatMessage(isUser = false, text = "명함에 대해 문장으로 물어보세요.\n예) \"판교에 있는 AI 개발자 찾아줘\"")
@@ -292,7 +301,8 @@ private fun ChatScreen(
                     messages.add(
                         ChatMessage(isUser = false, text = "명함에 대해 문장으로 물어보세요.\n예) \"판교에 있는 AI 개발자 찾아줘\"")
                     )
-                    focusPerson = null
+                    // 세션 초기화 시 대화 내역과 모델 conversation 을 모두 폐기한다.
+                    session.reset()
                     scope.launch(Dispatchers.IO) { LiteRtLmChatEngine.resetSharedChat() }
                 },
             ) {
@@ -334,16 +344,25 @@ private fun ChatScreen(
                 onClick = {
                     val question = input.trim()
                     input = ""
-                    // 새 질문을 추가하기 전에 직전 대화 기록 + 지칭 대상 인물을 캡처한다(멀티턴용).
-                    val history = recentHistory(messages)
-                    val focus = focusPerson
                     messages.add(ChatMessage(isUser = true, text = question))
+                    // 턴 시작을 구조화 메모리에 걸어둔다 — 이 턴이 끝까지 완료되지 못해도
+                    // (예외 등) 다음 턴에서 "아직 처리 못한 요청"으로 남는다.
+                    val turnId = java.util.UUID.randomUUID().toString()
+                    session.beginTurn(turnId, question)
                     scope.launch {
                         asking = true
                         val result = withContext(Dispatchers.IO) {
-                            runChat(context, searchService, question, history, focus)
+                            runChat(context, searchService, question, session)
                         }
                         asking = false
+                        // 대화 내역은 세션이 관리한다(최근 8개 window + 구조화 메모리).
+                        // 후속 발화 재사용 턴은 새로 검색하지 않았으니 도구 실행 기록도 없다.
+                        val executedTools = if (result.conversationalFollowup) {
+                            emptyList()
+                        } else {
+                            listOf("search_business_cards")
+                        }
+                        session.recordTurn(turnId, question, result.answer, executedTools)
                         // 질문이 실제로 이름을 지목했으면 그 이름을 지칭 대상으로 삼는다(우선).
                         // 그런 이름이 없으면(대명사/생략형 후속) 검색 1등 카드로 대체 — 새 개념
                         // 검색("판교 AI개발자 찾아줘")에서도 focus가 정상적으로 잡히게.
@@ -351,7 +370,33 @@ private fun ChatScreen(
                         // focus가 엉뚱한 사람으로 튀는 문제가 있었다(실기기에서 발견).
                         val resultNames = result.search?.results?.map { it.card.name }?.distinct().orEmpty()
                         val namedInQuestion = resultNames.firstOrNull { name -> question.contains(name) }
-                        (namedInQuestion ?: resultNames.firstOrNull())?.let { focusPerson = it }
+                        (namedInQuestion ?: resultNames.firstOrNull())?.let {
+                            session.putToolContext(AgentSession.KEY_FOCUS_PERSON, it)
+                        }
+                        // 정정/확인 발화가 아니었을 때만 근거 카드를 갱신한다
+                        // (정정 턴은 직전 근거를 그대로 유지해야 대화가 이어진다).
+                        if (!result.conversationalFollowup) {
+                            val ids = result.search?.results?.map { it.card.id }.orEmpty()
+                            session.putToolContext(
+                                AgentSession.KEY_LAST_CARD_IDS,
+                                ids.joinToString(",").ifBlank { null },
+                            )
+                            session.putToolContext(AgentSession.KEY_LAST_QUERY, question)
+                        }
+                        // 이번 턴이 물어본 속성을 남겨 둔다 — 다음 턴이 "○○씨는?" 처럼
+                        // 속성을 생략하면 여기서 이어받는다. 속성이 없는 질문이면
+                        // 이전 값을 그대로 둬서 대화 흐름을 유지한다.
+                        attributeOf(question)?.let {
+                            session.putToolContext(AgentSession.KEY_LAST_ATTRIBUTE, it)
+                        }
+                        // 이번 턴에 걸린 필드 조건어를 남긴다 — 다음 턴이 "그중에 …" 로
+                        // 좁히면 여기서 이어받는다. 조건이 없었으면 이전 값을 유지한다.
+                        result.search?.fieldFilters?.let { f ->
+                            val terms = (f.names + f.locations + f.titles).joinToString(" ")
+                            if (terms.isNotBlank()) {
+                                session.putToolContext(AgentSession.KEY_LAST_FILTER_TERMS, terms)
+                            }
+                        }
                         messages.add(
                             ChatMessage(
                                 isUser = false,
@@ -359,6 +404,8 @@ private fun ChatScreen(
                                 modelLabel = result.modelLabel,
                                 search = result.search,
                                 error = result.error,
+                                conversationalFollowup = result.conversationalFollowup,
+                                filteredOut = result.filteredOut,
                             )
                         )
                     }
@@ -414,8 +461,8 @@ private fun ChatBubble(message: ChatMessage, onCardClick: (BusinessCardEntity) -
             }
         }
         message.search?.let { search ->
-            SearchSummary(search)
-            search.results.take(3).forEach { hit ->
+            SearchSummary(search, message.conversationalFollowup, message.filteredOut)
+            search.results.take(5).forEach { hit ->
                 BusinessCardResultCard(hit, onClick = { onCardClick(hit.card) })
             }
         }
@@ -651,10 +698,28 @@ private fun ModelsScreen(
 }
 
 @Composable
-private fun SearchSummary(response: CardSearchResponse) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        AssistChip(onClick = {}, label = { Text("키워드: ${response.keywordQuery.ifBlank { "전체" }}") })
-        AssistChip(onClick = {}, label = { Text(response.retrieval) })
+private fun SearchSummary(
+    response: CardSearchResponse,
+    conversationalFollowup: Boolean = false,
+    filteredOut: List<String> = emptyList(),
+) {
+    // 검색이 왜 이렇게 동작했는지 화면에서 바로 보이게 한다 — 라우팅/필터/기권이 조용히
+    // 결과를 바꾸면 "검색이 이상하다"와 "규칙이 걸렸다"를 구분할 수 없다.
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AssistChip(onClick = {}, label = { Text("키워드: ${response.keywordQuery.ifBlank { "전체" }}") })
+            AssistChip(onClick = {}, label = { Text(response.retrieval) })
+        }
+        val notes = buildList {
+            if (conversationalFollowup) add("정정/확인 발화 → 재검색 없이 직전 결과 사용")
+            if (response.identifierRouted) add("식별자 질의 → 시맨틱 제외")
+            if (!response.fieldFilters.isEmpty) add("필드 필터 ${response.fieldFilters}")
+            if (response.abstained) add("기권 — 없는 이름/지역/번호")
+            if (filteredOut.isNotEmpty()) add("무관 판정 제외 ${filteredOut.size}명: ${filteredOut.joinToString(", ")}")
+        }
+        notes.forEach {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -867,42 +932,155 @@ private fun StatusCard(
     }
 }
 
+/** 조건에 맞는 사람이 하나도 없을 때 쓰는 고정 문구. LLM 도 이 문구로 답하도록 지시한다. */
+private const val NO_MATCH_PHRASE = "조건에 해당하는 명함을 찾지 못했습니다."
+
 /**
- * 화면의 메시지 목록에서 최근 대화 턴(사용자 질문 + 어시스턴트 답변)을 최대 maxTurns개 뽑는다.
- * 첫 안내 말풍선(사용자 질문 없이 어시스턴트만 있는 것)은 자연히 제외된다.
+ * 위 고정 문구 외에, LLM이 다른 말투로 "못 찾았다"고 답하는 경우도 거절로 인정한다.
+ * 실측(스트레스 테스트): "김철수 전화번호 알려줘"에 "김철수 전화번호는 찾지 못했습니다."
+ * 라고 답했는데 NO_MATCH_PHRASE 와 정확히 안 겹쳐서 거절로 인식을 못 했고, 그 결과
+ * "못 찾았다"는 답변 밑에 관계없는 카드가 그대로 남아있었다.
+ * "없습니다"는 넣지 않는다 — "안정우는 나이가 없습니다"처럼 '그 사람은 있는데 그
+ * 필드가 없다'는 정상 답변까지 거절로 오인해서 존재하는 카드를 지워버리기 때문이다.
  */
-private fun recentHistory(messages: List<ChatMessage>, maxTurns: Int = 3): List<Pair<String, String>> {
-    val turns = mutableListOf<Pair<String, String>>()
-    var pendingUser: String? = null
-    for (m in messages) {
-        if (m.isUser) {
-            pendingUser = m.text
-        } else if (pendingUser != null) {
-            turns.add(pendingUser!! to m.text)
-            pendingUser = null
-        }
-    }
-    return turns.takeLast(maxTurns)
+internal val REJECTION_MARKERS = listOf(NO_MATCH_PHRASE, "찾지 못했", "찾을 수 없", "찾지못했", "찾을수없")
+
+/**
+ * 명함 검색과 무관한 자기참조 질문("너는 누구야?") — 결정적으로 우회한다.
+ * 실측: 프롬프트 규칙에만 맡기면 "너"를 명함 속 인물로 오인해서 관계없는 사람 이름을
+ * 그대로 답했다(예: "너는 누구야?" -> "유유진").
+ */
+private val SELF_REFERENCE_PATTERNS = listOf(
+    "너는 누구", "너 누구", "너는 뭐", "너 뭐야", "너 뭐하는", "너 몇 살", "너는 몇 살",
+    "너는 ai", "너 ai", "너는 사람이야", "너는 로봇", "당신은 누구", "니 정체", "네 정체",
+)
+private const val SELF_REFERENCE_ANSWER = "저는 명함 검색을 도와드리는 온디바이스 AI 어시스턴트입니다."
+
+internal fun isSelfReferenceQuestion(question: String): Boolean {
+    val q = question.trim().lowercase()
+    if (q.isEmpty()) return false
+    return SELF_REFERENCE_PATTERNS.any { it in q }
 }
 
 /**
- * 멀티턴 RAG 채팅. 업계 표준인 "history-aware query rewriting"으로 구현한다:
- * 후속 질문("그 사람 직급이 뭐야?")을 검색 전에 대화 기록으로 독립형 질문
- * ("강건우의 직급이 뭐야?")으로 재작성해서 항상 올바른 명함이 검색되게 한다.
- * 그냥 대화 세션만 유지하면, 매 턴 새로 검색된 엉뚱한 명함이 컨텍스트로 주입돼
- * 기억을 덮어버리는 문제가 있었다(실기기에서 확인). 재작성이 그 뿌리를 해결한다.
+ * "전체 몇 장/명" 같이 조건 없이 전체를 묻는 질문 — 결정적으로 우회한다. 검색은 항상
+ * top-N(5명)까지만 후보를 채우므로, 이런 질문을 그냥 검색에 태우면 "총 5명"이라고
+ * 답해버린다(실측: 60장인데 5명이라고 답함) — top-5를 전체로 착각하게 만드는 잘못된
+ * 답이라 아예 검색 전에 걸러서 진짜 전체 개수로 답한다.
  *
- * @param history 직전 대화 턴들(사용자 질문, 어시스턴트 답변) — 답변 프롬프트의 맥락용.
- * @param focusPerson 직전 답변의 대상 인물 — "그 사람" 등 대명사가 가리킬 대상.
+ * 긴 신호 단어부터 원문에서 직접 걷어내고, 아무것도 안 남으면 "전체를 요구하는 것"으로
+ * 판정한다. 토큰화(KeywordSearchRanker.analyze) 기반으로 먼저 시도했다가 실측으로
+ * 버그를 발견해서 원문 문자열 직접 치환 방식으로 바꿨다: 조사 제거 로직이 "명함"을
+ * 조사 뗀 형태에서만 걸러내고 원본 "명함이"는 안 걸러내는 불일치가 있었다.
+ *
+ * "등록된 사람 총 몇 명이야?"처럼 "전체/모두/전부" 없이 "총"+"몇"만으로 전체를 묻는
+ * 문구도 신호에 추가했다(실측: 이 문구가 우회를 못 타서 "총 5명"으로 잘못 답함 —
+ * top-5를 전체로 착각하는 원래 버그가 그대로 재현됨). "총"만으로는 안 걸고 "몇"과
+ * 같이 나올 때만 건다 — "판교에 총 몇명이야?"처럼 조건이 있는 질의는 strip 단계에서
+ * "판교"가 안 걷어지고 남으므로 어차피 여기서 걸러진다(회귀 없음).
+ */
+private val GENERIC_LIST_STRIP_WORDS = listOf(
+    "등록된", "보여줘", "알려줘", "찾아줘", "리스트", "목록", "전체", "명함", "이름",
+    "카드", "사람", "모두", "전부", "몇", "장", "명", "총", "개", "다", "이", "야",
+    "은", "는", "이야",
+    "?", "!", ".", ",", " ",
+)
+
+internal fun isUnfilteredListAllQuestion(question: String): Boolean {
+    val hasGenericSignal = listOf("전체", "모두", "다 보여", "전부").any { it in question }
+    val hasTotalCountSignal = "총" in question && "몇" in question
+    if (!hasGenericSignal && !hasTotalCountSignal) return false
+    var stripped = question
+    for (w in GENERIC_LIST_STRIP_WORDS) stripped = stripped.replace(w, "")
+    return stripped.trim().isEmpty()
+}
+
+private val FILTERED_COUNT_SIGNAL_RE = Regex("몇\\s*(명|장|개)")
+
+/**
+ * 조건이 있는 카운트 질문("판교에 몇 명 있어?", "이사 직급 몇 명이야?")인지 본다.
+ * 조건 없는 전체질문(isUnfilteredListAllQuestion)은 이미 다른 우회가 처리하므로
+ * 거기서 걸리면 여기서는 제외한다.
+ */
+internal fun isFilteredCountQuestion(question: String): Boolean {
+    if (isUnfilteredListAllQuestion(question)) return false
+    return FILTERED_COUNT_SIGNAL_RE.containsMatchIn(question)
+}
+
+/**
+ * 멀티턴 RAG 채팅.
+ *
+ * 대화 상태는 AgentSession 이 갖는다(최근 메시지 8개 window + rolling summary +
+ * tool_session_context). 그 위에 두 가지 결정적 처리가 얹혀 있다.
+ *
+ *  1) 지칭 치환: 후속 질문("그 사람 직급이 뭐야?")의 대명사를 직전 대상 인물로 치환한다.
+ *     소형 모델의 LLM 재작성은 의도를 왜곡해(예: "어디 살아"→"회사") 불안정했고(실기기 확인),
+ *     대화 기록에서 이름을 재추출하면 "전화번호는" 같은 명사를 인물로 오인했다.
+ *     그래서 직전 검색 결과의 '실제 명함 이름'만 지칭 대상으로 쓴다.
+ *  2) 정정/확인 발화 처리: "5명인데?" 같이 검색할 내용이 없는 발화는 재검색하지 않고
+ *     직전 카드를 그대로 근거로 쓴다. 이게 없으면 엉뚱한 카드가 근거가 돼 대화가 끊긴다.
  */
 private fun runChat(
     context: Context,
     searchService: CardSearchService,
     question: String,
-    history: List<Pair<String, String>>,
-    focusPerson: String?,
+    session: AgentSession,
 ): ChatResult {
     if (question.isBlank()) return ChatResult("질문을 입력하세요.", null)
+
+    // 검색/LLM 엔진 로드보다 먼저 결정적으로 우회할 질문인지 본다 — 불필요한 엔진 로드를
+    // 막기도 하고, 프롬프트 규칙에만 맡기면 신뢰할 수 없는 질문 유형이기도 하다.
+    // conversationalFollowup=true로 반환한다 — 검색을 안 했으니 도구 실행 기록을 남기지
+    // 않고, focus/직전 카드 id도 건드리지 않는 게 이 플래그의 기존 의미와 정확히 같다.
+    if (isSelfReferenceQuestion(question)) {
+        return ChatResult(SELF_REFERENCE_ANSWER, null, conversationalFollowup = true)
+    }
+    if (isUnfilteredListAllQuestion(question)) {
+        val total = searchService.totalCardCount()
+        return ChatResult(
+            "현재 총 ${total}명의 명함이 등록되어 있습니다. 이름·회사·지역 등 구체적인 조건으로 검색해 보세요.",
+            null,
+            conversationalFollowup = true,
+        )
+    }
+    // 조건이 있는 카운트 질문은 검색(top-5 컷)을 안 태우고 전체 카드를 직접 세서 정확한
+    // 개수로 답한다(실측: "AI 다루는 사람 몇 명이야?" 가 실제 42명인데 검색은 5명까지만
+    // 봐서 캡됨). 가제티어가 모르는 조건(개념형 질의)이면 null이 와서 기존 검색+LLM
+    // 경로로 그대로 떨어진다.
+    if (isFilteredCountQuestion(question)) {
+        val matched = searchService.countByCondition(question)
+        if (matched != null) {
+            val sample = matched.take(5).map { card ->
+                CardSearchHit(card = card, score = 0.0, keywordRank = null, vectorRank = null, similarity = 0f)
+            }
+            val response = CardSearchResponse(
+                query = question,
+                engine = "count",
+                retrieval = "gazetteer-count",
+                keywordQuery = question,
+                semanticQuery = question,
+                results = sample,
+            )
+            return ChatResult(
+                "총 ${matched.size}명",
+                response,
+                conversationalFollowup = true,
+            )
+        }
+    }
+
+    val focusPerson = session.toolContextValue(AgentSession.KEY_FOCUS_PERSON)
+    val prevCardIds = session.toolContextValue(AgentSession.KEY_LAST_CARD_IDS)
+        ?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+
+    // 속성을 생략한 후속("음가영씨는?")이면 직전 턴이 물어본 속성을 이어 붙인다.
+    // 아래 로직은 전부 이 보충된 질문을 쓴다 — 검색어와 LLM 에 넘기는 질문이 갈리면
+    // 카드는 맞는데 답변만 엉뚱해진다.
+    @Suppress("NAME_SHADOWING")
+    val question = applyNarrowing(
+        carryOverAttribute(question, session.toolContextValue(AgentSession.KEY_LAST_ATTRIBUTE)),
+        session.toolContextValue(AgentSession.KEY_LAST_FILTER_TERMS),
+    )
 
     // Chat 모델(Gemma 4 E2B 등)이 없거나 메모리가 부족한 폰에서는 FunctionGemma로 대신 답변한다.
     val role = when {
@@ -915,7 +1093,8 @@ private fun runChat(
     if (role == null) {
         val search = runCatching { searchService.searchHybrid(question, 5) }.getOrNull()
         return ChatResult(
-            answer = "LLM 모델이 없어 검색 결과만 보여드려요. 모델 탭에서 LLM 파일을 가져오면 답변도 생성됩니다.",
+            answer = if (search?.abstained == true) NO_MATCH_PHRASE
+            else "LLM 모델이 없어 검색 결과만 보여드려요. 모델 탭에서 LLM 파일을 가져오면 답변도 생성됩니다.",
             search = search,
         )
     }
@@ -927,23 +1106,95 @@ private fun runChat(
         return ChatResult("LLM 로드에 실패했어요. 검색 결과만 보여드려요.", search, error = e.message ?: e.javaClass.simpleName)
     }
     val loadedModel = engine.loadedFileName.removeSuffix(".litertlm")
+    val modelLabel = if (role == LlmRole.ToolCalling) "$loadedModel (임시 대체 — 품질 낮음)" else loadedModel
 
-    // 1) 후속 질문의 대명사("그 사람" 등)를 직전 대화의 대상 인물로 '결정적으로' 치환한다.
-    //    소형 모델의 LLM 재작성은 의도를 왜곡해(예: "어디 살아"→"회사") 불안정했고(실기기 확인),
-    //    대화 기록 텍스트에서 이름을 재추출하면 "전화번호는" 같은 명사를 인물로 오인했다(시뮬 확인).
-    //    그래서 직전 검색 최상위 카드의 '실제 명함 이름'(focusPerson)만 지칭 대상으로 쓴다.
+    // 순서 지시("두 번째 사람")면 직전 집합에서 그 하나만 남긴다. 새 검색이 아니라
+    // 앞 결과를 가리키는 발화이므로 아래 후속 경로로 보낸다.
+    val ordinalIdx = ConversationalFollowup.ordinalIndex(question)
+    val selectedIds = if (ordinalIdx != null && prevCardIds.isNotEmpty()) {
+        val i = if (ordinalIdx < 0) prevCardIds.size - 1 else ordinalIdx
+        prevCardIds.getOrNull(i)?.let { listOf(it) } ?: prevCardIds
+    } else {
+        prevCardIds
+    }
+
+    // 정정/확인/복수지시 발화 — 새로 검색하지 않고 직전 턴의 카드를 그대로 근거로 쓴다.
+    if ((ConversationalFollowup.isFollowup(question) || ordinalIdx != null) &&
+        selectedIds.isNotEmpty()
+    ) {
+        val search = runCatching { searchService.searchByIds(selectedIds) }.getOrNull()
+        val answer = runCatching {
+            engine.generate(
+                buildAnswerPrompt(session, question, search?.ragContext(5).orEmpty(), followup = true)
+            )
+        }.getOrNull().orEmpty()
+        val finalAnswer = answer.ifBlank { "직전 결과 기준으로 답변을 만들지 못했어요." }
+        // 후속 발화에서도 LLM이 "못 찾았다"고 답할 수 있다 — 메인 경로와 동일하게 그
+        // 경우 카드를 비운다(일관성 문제였다. 메인 경로는 이미 narrowByAnswer로 처리함).
+        var narrowedSearch = search
+        var dropped: List<String> = emptyList()
+        if (search != null) {
+            val (n, d) = narrowByAnswer(search, finalAnswer)
+            narrowedSearch = n
+            dropped = d
+        }
+        return ChatResult(
+            answer = finalAnswer,
+            search = narrowedSearch,
+            modelLabel = modelLabel,
+            conversationalFollowup = true,
+            filteredOut = dropped,
+        )
+    }
+
+    // 문맥 참조 발화("아까 말한 …")인데 새로 검색하라는 말이 없으면, 검색도 LLM 호출도
+    // 없이 이미 아는 것으로 답한다(sojung contextAnswerForSearch).
+    //
+    // **대화형 후속 검사보다 뒤에 둔다.** 앞에 두었더니 "그 사람들 회사 알려줘"가
+    // CONTEXT_REFERENCES 의 "그 사람"에 걸려서 직전 답변을 그대로 재생했다 — 사용자는
+    // 회사를 물었는데 이름 목록만 다시 받는다(멀티턴 평가에서 21건 잡힘).
+    // 직전 결과 집합에 대해 **새로 묻는** 발화는 그 카드로 다시 답을 만들어야 하고,
+    // context_answer 는 "아까 뭐였지"처럼 **되짚는** 발화에만 쓴다.
+    ConversationalFollowup.contextAnswer(session, question)?.let { contextual ->
+        val prior = if (prevCardIds.isNotEmpty()) {
+            runCatching { searchService.searchByIds(prevCardIds) }.getOrNull()
+        } else {
+            null
+        }
+        return ChatResult(
+            answer = contextual,
+            search = prior,
+            modelLabel = modelLabel,
+            conversationalFollowup = true,
+        )
+    }
+
     val searchQuery = resolveSearchQuery(question, focusPerson)
 
-    // 2) 재작성된 쿼리로 하이브리드 검색.
     val search = try {
         searchService.searchHybrid(searchQuery, 5)
     } catch (e: Throwable) {
         return ChatResult("검색 중 문제가 있었습니다.", null, error = e.message ?: e.javaClass.simpleName)
     }
 
-    // 3) 대화 기록 + 검색 컨텍스트 + 원문 질문으로 답변 생성(stateless — 프롬프트에 기록을 명시적으로 넣는다).
+    // 근거가 없으면 LLM 을 호출하지 않는다 — 부르면 무관한 카드로 답을 지어낸다
+    // (실측: 없는 사람 "정하은"에 대해 "채용설명회에서 만났습니다"라고 답했다).
+    //
+    // 기권뿐 아니라 **후보가 0장인 경우**도 포함한다. "부산에 있는 디자인"처럼 지역·직함이
+    // 둘 다 데이터에 있는데 교집합만 비는 경우인데, 빈 컨텍스트를 넣었더니 2B 모델이
+    // 컨텍스트 문자열("검색 후보 없음")을 그대로 답변으로 뱉었다(pass^3 3회 모두 재현).
+    if (search.abstained || search.results.isEmpty()) {
+        return ChatResult(answer = NO_MATCH_PHRASE, search = search, modelLabel = modelLabel)
+    }
+
+    // 조건이 명확해서 전체를 셀 수 있으면 그 진짜 수를 컨텍스트에 넣는다. 못 세는
+    // 개념형 질의면 null 이라 헤더에 숫자가 안 들어간다 — 모델이 후보 개수를 답으로
+    // 옮겨 적는 것을 막기 위해서다(실측: "디자인하는 사람" -> 이름 대신 "총 3명").
+    val totalMatches = runCatching { searchService.countByCondition(question)?.size }.getOrNull()
+
     return try {
-        val llmAnswer = engine.generate(buildAnswerPrompt(history, question, search.ragContext(3)))
+        val llmAnswer = engine.generate(
+            buildAnswerPrompt(session, question, search.ragContext(5, totalMatches)))
         if (llmAnswer == LiteRtLmChatEngine.EMPTY_RESPONSE) {
             ChatResult(
                 answer = "LLM이 유효한 답변을 만들지 못했어요. 검색 결과를 참고해 주세요." +
@@ -952,10 +1203,16 @@ private fun runChat(
                 modelLabel = loadedModel,
             )
         } else {
+            // LLM 판정을 카드 목록에도 반영한다. 검색은 top-N 을 채우느라 무관한 후보를 함께
+            // 담는데(점수 컷오프로는 못 자른다는 것을 오프라인 측정으로 확인), LLM 은 그중
+            // 관련 있는 사람만 골라 답한다. 그 판단을 화면 카드에도 적용해 답변과 카드가
+            // 어긋나지 않게 한다.
+            val (narrowed, dropped) = narrowByAnswer(search, llmAnswer)
             ChatResult(
                 answer = llmAnswer,
-                search = search,
-                modelLabel = if (role == LlmRole.ToolCalling) "$loadedModel (임시 대체 — 품질 낮음)" else loadedModel,
+                search = narrowed,
+                modelLabel = modelLabel,
+                filteredOut = dropped,
             )
         }
     } catch (e: Throwable) {
@@ -967,9 +1224,91 @@ private fun runChat(
     }
 }
 
-/** 최근 대화 기록을 붙인 텍스트("사용자: ... / 어시스턴트: ...") — 프롬프트 삽입용. */
-private fun formatHistory(history: List<Pair<String, String>>): String =
-    history.joinToString("\n") { (q, a) -> "사용자: $q\n어시스턴트: $a" }
+// buildAnswerPrompt 규칙 3번("맨 위 '총 N명'을 그대로 쓰고")이 요구하는 집계형 답변
+// 형식과 정확히 맞춘 패턴. 답변에 후보 이름도 없고 이 패턴도 없으면 명함과 무관한
+// 답변이라는 뜻이다(실측: "오늘 날씨 어때?" -> "날씨 정보는 명함 컨텍스트에 포함되어
+// 있지 않습니다." 인데 top-5 후보가 그대로 카드로 남음. "홍길동 명함 삭제해 줘"
+// (존재 안 하는 이름) -> 의도 확인 답변인데 엉뚱한 홍씨 5명이 카드로 남음).
+private val AGGREGATE_COUNT_RE = Regex("총\\s*(\\d+)\\s*명")
+
+/**
+ * 답변이 이 카드를 근거로 삼았는가.
+ *
+ * 이름만 보면 안 된다(실측 회귀): "문선영씨 회사가 어디야?" -> "주식회사 노블어패럴입니다."
+ * 처럼 필드 값으로만 답하는 게 정상인 질문이 많은데, 이름이 없다는 이유로 카드를 통째로
+ * 지워버렸다. 회사/주소/이메일/전화 같은 '그 카드에서 온 값'도 근거로 인정한다.
+ * 직함은 쓰지 않는다 — 여러 사람이 공유해서 변별력이 없다.
+ */
+private fun cardReferencedIn(card: BusinessCardEntity, answer: String): Boolean {
+    if (answer.isBlank()) return false
+    val name = card.name.orEmpty().trim()
+    if (name.isNotBlank() && name in answer) return true
+    for (raw in listOf(card.company, card.address, card.email)) {
+        // 라벨 접두어("A.  ", "E.  ")를 떼고 비교한다.
+        val v = raw.orEmpty().trim().substringAfterLast("  ").trim()
+        if (v.length < 4) continue
+        if (v in answer) return true
+        // LLM 이 값의 일부만 말하는 경우도 인정한다 — 주소가 대표적이다.
+        // 실측: 카드가 "강원도 당진시 반포대2로 67 (승현이김리)" 인데 답변은 괄호를 뺀
+        // "강원도 당진시 반포대2로 67" 이라 v in answer 가 False 였고 카드가 지워졌다.
+        val head = v.substringBefore(" (").trim()
+        if (head.length >= 6 && head in answer) return true
+    }
+    val digits = card.phone.orEmpty().filter { it.isDigit() }
+    val answerDigits = answer.filter { it.isDigit() }
+    if (digits.length >= 4 && answerDigits.length >= 4 && digits.takeLast(4) in answerDigits) return true
+    return false
+}
+
+/**
+ * LLM 답변에 언급된 사람만 카드로 남긴다.
+ *
+ * 답변이 전원 거절(NO_MATCH_PHRASE)이면 카드도 전부 비운다 — 안 그러면 "없습니다" 라는
+ * 답변 밑에 명함이 그대로 뜬다. 아무 이름도 언급되지 않은 집계형 답변("총 5명")이면
+ * 원본을 유지한다(이름이 없다고 해서 후보가 무관한 건 아니므로). 이름도 없고 집계형
+ * 형식도 아니면 명함과 무관한 답변이므로 카드를 비운다.
+ */
+internal fun narrowByAnswer(
+    search: CardSearchResponse,
+    answer: String,
+): Pair<CardSearchResponse, List<String>> {
+    if (REJECTION_MARKERS.any { it in answer }) {
+        return search.copy(results = emptyList()) to search.results.map { it.card.name }
+    }
+    val agg = AGGREGATE_COUNT_RE.find(answer)
+    // "총 0명" — 숫자로 표현된 거절이다. 집계형이라고 카드를 살려두면 "총 0명"이라
+    // 답하면서 명함 5장이 뜨는 모순이 된다(실측: "울릉도 근무자" -> '총 0명', 카드 5장).
+    if (agg != null && agg.groupValues[1].toIntOrNull() == 0) {
+        return search.copy(results = emptyList()) to search.results.map { it.card.name }
+    }
+    val mentioned = search.results.filter { cardReferencedIn(it.card, answer) }
+    if (mentioned.isNotEmpty()) {
+        val dropped = search.results.filterNot { it in mentioned }.map { it.card.name }
+        return search.copy(results = mentioned) to dropped
+    }
+    // 이름으로 한 사람이 특정된 상태면 답변이 그 카드를 다시 인용하지 않아도 남긴다.
+    // 이 함수가 하는 일은 '후보 여럿 중 답변이 가리키는 사람 고르기'인데, 후보가 하나면
+    // 고를 게 없다. 실측 회귀: "직급은?" -> "AI 개발자", "부서는?" -> "데이터사이언스팀"
+    // 처럼 필드 값만 짧게 답하면 이름·회사·주소가 답변에 없어서 카드가 통째로 사라졌다
+    // (멀티턴에서 계속 사라짐). 거절 답변은 위 두 분기에서 이미 걸러진다.
+    if (search.fieldFilters.names.isNotEmpty() && search.results.size == 1) {
+        return search to emptyList()
+    }
+    if (agg == null) {
+        return search.copy(results = emptyList()) to search.results.map { it.card.name }
+    }
+    // 집계형인데 답변이 말한 수가 후보 수보다 적으면 그 수만큼만 보여준다.
+    // 안 그러면 "총 2명"이라 답하고 카드는 5장 뜨는 모순이 된다
+    // (실측: "AI 개발하는 사람 찾아줘" -> '총 2명' + 카드 5장. 뒤 3장은 AI개발팀이지만
+    //  직함이 대표이사·디자인 디렉터라 실제 답이 아니었다).
+    // 정렬이 정확 일치를 앞에 두므로 상위 N개가 그 N명이다.
+    val want = agg.groupValues[1].toIntOrNull() ?: return search to emptyList()
+    if (want in 1 until search.results.size) {
+        val kept = search.results.take(want)
+        return search.copy(results = kept) to search.results.drop(want).map { it.card.name }
+    }
+    return search to emptyList()
+}
 
 // 후속 질문임을 나타내는 대명사/지시 표현들. 이게 있을 때 직전 인물로 치환한다.
 private val FOLLOWUP_PRONOUNS = listOf(
@@ -990,12 +1329,63 @@ private val ATTRIBUTE_NOUNS = listOf(
  * 기록 텍스트에서 정규식으로 이름을 재추출할 때 생기던 오인("전화번호는"→인물)이 없다.
  * 이름이 이미 있는 질문(대명사 없음)은 그대로 둔다 — 의도 왜곡 없이 정확히 검색되게.
  */
+/**
+ * 생략된 **속성**을 직전 턴에서 이어받는다.
+ *
+ * 생략형 후속은 두 방향이 있는데 그동안 한쪽만 처리하고 있었다:
+ *   "주소는?"      주어 생략 + 속성 명시  -> focus 인물을 앞에 붙임 (resolveSearchQuery)
+ *   "음가영씨는?"  주어 명시 + 속성 생략  -> **처리 없음**
+ * 뒤엣것은 검색은 맞게 되는데(그 사람 카드를 찾음) 답변이 "음가영"처럼 이름만 되돌아왔다.
+ * 앞 턴이 "회사가 어디야?"였으면 이번에도 회사를 묻는 것이므로 그 속성을 붙여 준다.
+ *
+ * 별도 규칙을 더한 게 아니라 이미 있던 생략 처리의 나머지 절반이다.
+ */
+internal fun carryOverAttribute(question: String, lastAttribute: String?): String {
+    if (lastAttribute.isNullOrBlank()) return question
+    val q = question.trim()
+    // "이름 + 조사 + ?" 형태만 대상으로 한다("음가영씨는?", "그 사람은?").
+    // 이미 속성 명사가 들어 있으면 손대지 않는다.
+    if (ATTRIBUTE_NOUNS.any { it in q }) return question
+    val m = Regex("^(.{2,10}?)(씨|님)?(는|은|이|가)\\s*\\??$").find(q) ?: return question
+    val subject = m.groupValues[1] + m.groupValues[2]
+    return "$subject $lastAttribute"
+}
+
+/** 질문에서 어떤 속성을 물었는지 뽑아 둔다(다음 턴이 속성을 생략했을 때 이어받으려고). */
+internal fun attributeOf(question: String): String? =
+    ATTRIBUTE_NOUNS.firstOrNull { it in question }
+
+/** "그중에", "거기서" — 앞 턴 결과 안에서 더 좁히자는 표현. */
+private val NARROWING_MARKERS = listOf("그중", "그 중", "거기서", "그 안에서", "그것들 중")
+
+/**
+ * 점진적 좁히기 — 앞 턴의 조건을 이어받는다.
+ *
+ * "대전에 있는 사람 찾아줘" -> "그중에 변호사만" 에서 앞 턴의 지역 조건이 사라져
+ * **전국 변호사**가 나왔다. 매 턴 질문에서 조건을 새로 뽑기 때문이다.
+ *
+ * 조건을 따로 병합하지 않고 **앞 턴의 조건어를 질의 앞에 붙인다** — focus 인물을 앞에
+ * 붙이는 resolveSearchQuery 와 같은 방식이다. 그러면 필터 추출이 알아서 둘을 합치고,
+ * 검색어에도 그 말이 들어가서 후보 풀에 해당 지역 사람이 실제로 담긴다
+ * (필터만 합치면 풀에 대전 사람이 없어 걸러낼 대상 자체가 없을 수 있다).
+ */
+internal fun applyNarrowing(question: String, previousTerms: String?): String {
+    if (previousTerms.isNullOrBlank()) return question
+    if (NARROWING_MARKERS.none { it in question }) return question
+    return "$previousTerms $question"
+}
+
 private fun resolveSearchQuery(question: String, focusPerson: String?): String {
     if (focusPerson == null) return question
     val hasPronoun = FOLLOWUP_PRONOUNS.any { question.contains(it) }
-    // 질문에 숫자(전화번호 뒷자리 등 새 검색값)가 있으면 생략형으로 보지 않는다 —
+    // 질문에 '새 검색값'(전화번호 뒷자리 등)이 있으면 생략형 후속으로 보지 않는다 —
     // "번호 뒷자리 4312인 분"처럼 새 값을 주는 질문을 이전 focus에 억지로 묶으면 안 됨.
-    val hasNewValue = question.any { it.isDigit() }
+    //
+    // 숫자가 하나라도 있으면 새 값으로 봤더니 실측으로 버그가 났다: "전화번호 뒤 4자리는
+    // 뭐야"의 '4'가 새 값으로 잡혀서 직전 인물이 안 붙고 엉뚱한 검색이 됐다(답변은
+    // '조건에 해당하는 명함을 찾지 못했습니다', focus 도 딴 사람으로 튐).
+    // '4자리' 같은 자릿수 표현과 '4312' 같은 검색값은 자릿수 길이로 가른다.
+    val hasNewValue = Regex("\\d{3,}").containsMatchIn(question)
     val isElliptical = !hasNewValue && ATTRIBUTE_NOUNS.any { question.trimStart().startsWith(it) }
     // 대명사도 없고 속성 명사로 시작하지도 않으면 새 인물/독립 질문 — 그대로 둔다.
     if (!hasPronoun && !isElliptical) return question
@@ -1005,24 +1395,41 @@ private fun resolveSearchQuery(question: String, focusPerson: String?): String {
     return if (q != question) q else "$focusPerson $question"
 }
 
-/** 검색 컨텍스트 + 대화 기록 + 원문 질문으로 최종 답변을 만드는 프롬프트. */
-private fun buildAnswerPrompt(history: List<Pair<String, String>>, question: String, ragContext: String): String {
-    val historyBlock = if (history.isEmpty()) "" else "이전 대화:\n${formatHistory(history)}\n\n"
-    return """
-        You are an on-device assistant for a business card app.
-        Answer in Korean using only the business card context below.
-        - "그 사람" 같은 표현은 이전 대화에서 다룬 인물을 가리킨다. 그 인물 기준으로 답하라.
-        - 컨텍스트에 이름이 비슷한 사람이 여러 명 있어도, 이전 대화의 인물과 일치하는 사람을 골라 답하라.
-        - 명함 컨텍스트에 있다고 해서 전부 질문과 관련 있는 건 아니다. 질문과 실제로
-          관련된 사람만 답하고, 무관해 보이는 사람은 완전히 무시하라.
-        - 되묻지 말고, 컨텍스트에 답이 있으면 바로 답하라. 정말 없을 때만 없다고 말하라.
-
-        ${historyBlock}명함 컨텍스트:
-        $ragContext
-
-        질문:
-        $question
-    """.trimIndent()
+/**
+ * 검색 컨텍스트 + 세션 컨텍스트로 최종 답변 프롬프트를 만든다.
+ *
+ * 규칙 수를 늘릴수록 2B 모델의 준수율이 떨어진다(실측: 규칙 6개일 때 "판교에 있는 디자이너"에
+ * 이름 대신 "총 2명"이라고 답했다). 꼭 필요한 것만 두고, 실제로 결과를 좌우하는 규칙을
+ * 뒤에 배치한다 — 최근 규칙일수록 더 잘 따른다.
+ */
+private fun buildAnswerPrompt(
+    session: AgentSession,
+    question: String,
+    ragContext: String,
+    followup: Boolean = false,
+): String {
+    val rules = buildString {
+        append("You are an on-device assistant for a business card app.\n")
+        append("Answer in Korean using only the business card context below.\n")
+        append("- \"그 사람\" 같은 표현은 이전 대화에서 다룬 인물을 가리킨다. 그 인물 기준으로 답하라.\n")
+        append("- 되묻지 말고 바로 답하라. 이름을 물으면 이름을 답하라.\n")
+        // 2B 모델은 목록을 세다 틀린다(실측: 판교 5명을 맞게 검색했는데 "4명입니다").
+        // 그래서 셀 일이 없게 컨텍스트 맨 위에 개수를 박아 두고 그대로 쓰게 한다.
+        append("- 인원수를 물었을 때만 숫자를 써라. 후보 전원이 조건에 맞으면 맨 위 '총 N명'을\n")
+        append("  그대로 쓰고 직접 세지 마라.\n")
+        // 이 규칙이 무관 카드를 실제로 잘라낸다. '전원 거절'은 같은 판단의 극단이라 붙여 둔다 —
+        // 따로 떼면 모델이 후보 중 하나를 억지로 고른다(실측: "우주비행사 찾아줘" -> '장우주').
+        append("- 가장 중요: 컨텍스트에 있다고 질문과 관련 있는 건 아니다. 직함·부서·업무로 판단해\n")
+        append("  질문 조건에 맞는 사람만 답하고, 무관한 사람은 이름조차 언급하지 마라.\n")
+        append("  이름 글자가 우연히 겹치는 것은 근거가 아니다.\n")
+        append("  맞는 사람이 하나도 없으면 다른 말 없이 '$NO_MATCH_PHRASE' 라고만 답하라.\n")
+        if (followup) {
+            append("- 지금 사용자 발화는 새 검색이 아니라 직전 답변에 대한 정정/확인/추가질문이다.\n")
+            append("  아래 컨텍스트는 '직전 검색 결과'다. 이 사람들만 대상으로 짧게 답하라.\n")
+            append("  사용자가 숫자나 사실을 정정했고 컨텍스트가 사용자 말과 맞으면 정정을 인정하라.\n")
+        }
+    }
+    return "$rules\n${session.buildContextBlocks(question)}\n\n명함 컨텍스트:\n$ragContext"
 }
 
 private fun runLlmSmokeTest(context: Context, role: LlmRole): String =
