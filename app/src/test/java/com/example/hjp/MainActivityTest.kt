@@ -178,14 +178,24 @@ class MainActivityTest {
     }
 
     @Test
-    fun `narrowByAnswer 는 이름 조건이 있어도 후보가 여럿이면 무관한 답변에 카드를 비운다`() {
-        // 위 예외는 후보가 하나일 때만이다 — 동명이인 2명 중 누구인지 답변이
-        // 안 가리키면 예전대로 비운다(무관한 명함이 남는 걸 막는 게 이 단계의 목적).
-        val search = sampleSearchResponse(listOf("하채원", "하채원"))
+    fun `narrowByAnswer 는 하드 필터를 통과한 카드는 답변이 일부만 말해도 지우지 않는다`() {
+        // 실기기 실측: "대전에 있는 변호사 찾아줘" 에 검색은 2명을 맞게 찾았는데 답변이
+        // 한 명만 말해서 나머지가 잘렸다. 그 상태로 "두 번째 사람 연락처" 를 물으면
+        // 두 번째가 아예 없다. 필드 조건이 걸렸다는 건 검색이 이미 조건을 만족하는
+        // 사람만 남겼다는 뜻이라, 그 카드들은 정의상 답이다.
+        //
+        // 예전에는 이 경우에도 비웠다("동명이인 2명 중 누구인지 안 가리키면 비운다").
+        // 무관한 카드를 막는 게 목적이었는데, 그건 **조건이 없는** 질의에서만 필요하다.
+        val filtered = sampleSearchResponse(listOf("탁예린", "방우성"))
+            .copy(fieldFilters = FieldFilters(locations = listOf("대전"), titles = listOf("변호사")))
+        val (kept, dropped) = narrowByAnswer(filtered, "탁예린")
+        assertEquals(listOf("탁예린", "방우성"), kept.results.map { it.card.name })
+        assertTrue(dropped.isEmpty())
+
+        // 동명이인도 마찬가지 — 이름 조건이 걸렸으면 둘 다 남긴다.
+        val dup = sampleSearchResponse(listOf("하채원", "하채원"))
             .copy(fieldFilters = FieldFilters(names = listOf("하채원")))
-        val (narrowed, dropped) = narrowByAnswer(search, "오늘은 화요일입니다.")
-        assertTrue(narrowed.results.isEmpty())
-        assertEquals(2, dropped.size)
+        assertEquals(2, narrowByAnswer(dup, "오늘은 화요일입니다.").first.results.size)
     }
 
     @Test

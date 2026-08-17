@@ -123,9 +123,13 @@ SELF_REFERENCE_ANSWER = "저는 명함 검색을 도와드리는 온디바이스
 # 만드는 잘못된 답이라 아예 검색 전에 걸러서 진짜 전체 개수로 답한다.
 # 긴 것부터 순서대로 치환해야 짧은 조각("명")이 긴 단어("명함") 안쪽을 망가뜨리지 않는다.
 GENERIC_LIST_STRIP_WORDS = (
-    "등록된", "보여줘", "알려줘", "찾아줘", "리스트", "목록", "전체", "명함", "이름",
-    "카드", "사람", "모두", "전부", "몇", "장", "명", "총", "개", "다", "이", "야",
-    "은", "는", "이야",
+    # 긴 것부터 — "내가 가진"이 "내"보다 먼저 걷혀야 한다.
+    "가지고 있어", "가지고 있는", "가지고있는", "내가 가진", "가진", "가지고",
+    "저장된", "등록된", "있는", "있어", "있나", "있지",
+    "보여줘", "알려줘", "찾아줘", "리스트", "목록", "전체", "명함", "이름",
+    "카드", "사람", "모두", "전부", "얼마나", "몇", "장수", "개수", "장", "명", "총", "개",
+    "내", "제", "다", "이", "야", "어", "지", "나",
+    "은", "는", "이야", "인가", "될까",
     "?", "!", ".", ",", " ",
 )
 
@@ -548,9 +552,8 @@ def is_unfiltered_list_all_question(question: str) -> bool:
     "판교"가 안 걷어지고 남으므로 어차피 여기서 걸러진다(회귀 없음).
     """
     q = question or ""
-    has_generic_signal = any(sig in q for sig in ("전체", "모두", "다 보여", "전부"))
-    has_total_count_signal = "총" in q and "몇" in q
-    if not (has_generic_signal or has_total_count_signal):
+    # 개수/목록을 묻는 말이 있어야 한다. 이게 없으면 그냥 검색 질의다.
+    if not re.search(r"몇|목록|리스트|다 보여|얼마나|개수|장수|전체|전부|모두", q):
         return False
     stripped = q
     for w in GENERIC_LIST_STRIP_WORDS:
@@ -908,6 +911,13 @@ def build_prompt(memory, recent_pairs, question, ctx, turn_id=None, followup=Fal
             "  아래 컨텍스트는 '직전 검색 결과'다. 이 사람들만 대상으로 짧게 답하라.\n"
             "  사용자가 숫자나 사실을 정정했고 컨텍스트가 사용자 말과 맞으면 정정을 인정하라.\n"
         )
+        # 무엇을 물었는지 **코드로 뽑아서** 알려준다. 규칙을 하나 더 얹는 게 아니라
+        # 이미 해석해 둔 의도를 전달하는 것이다 — 이게 없으면 "두 번째 사람 연락처" 처럼
+        # 속성을 명시해도 모델이 이름만 돌려줬다(실측). followup 분기가 "짧게 답하라"
+        # 로만 유도해서 무엇을 답할지가 비어 있었다.
+        asked = attribute_of(question)
+        if asked:
+            rules += f"- 사용자가 물은 것은 '{asked}' 다. 그 값을 답하라(이름만 답하지 마라).\n"
     return f"{rules}\n{hist}명함 컨텍스트:\n{ctx}\n\n사용자 발화:\n{question}"
 
 
@@ -1225,6 +1235,16 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
                 llm_rejected = True
                 filtered_out = [CARDS_BY_ID[cid]["name"] for cid in top_ids]
                 top_ids = []
+            elif field_filters:
+                # **하드 필터를 통과한 카드는 답변이 뭐라 하든 지우지 않는다.**
+                # 필드 조건이 걸렸다는 건 검색이 이미 '조건을 만족하는 사람'만 남겼다는
+                # 뜻이라 그 카드들은 정의상 답이다. LLM 이 일부만 말했다고 나머지를 지우면
+                # 사용자가 답의 일부만 본다(실기기 실측: "대전에 있는 변호사" 2명을 맞게
+                # 찾았는데 답변이 한 명만 말해서 다른 한 명이 잘렸고, 그 상태로
+                # "두 번째 사람 연락처"를 물으면 두 번째가 아예 없었다).
+                # 원래 목적(무관한 카드 방지)은 조건이 없는 질의에만 필요하다 —
+                # "오늘 날씨 어때?"는 필드 조건이 안 잡혀 아래 else 로 내려가 비워진다.
+                pass
             elif mentioned:
                 filtered_out = [CARDS_BY_ID[cid]["name"] for cid in top_ids if cid not in mentioned]
                 top_ids = mentioned

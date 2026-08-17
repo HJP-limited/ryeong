@@ -980,16 +980,25 @@ internal fun isSelfReferenceQuestion(question: String): Boolean {
  * "판교"가 안 걷어지고 남으므로 어차피 여기서 걸러진다(회귀 없음).
  */
 private val GENERIC_LIST_STRIP_WORDS = listOf(
-    "등록된", "보여줘", "알려줘", "찾아줘", "리스트", "목록", "전체", "명함", "이름",
-    "카드", "사람", "모두", "전부", "몇", "장", "명", "총", "개", "다", "이", "야",
-    "은", "는", "이야",
+    // 긴 것부터 — "내가 가진"이 "내"보다 먼저 걷혀야 한다.
+    "가지고 있어", "가지고 있는", "가지고있는", "내가 가진", "가진", "가지고",
+    "저장된", "등록된", "있는", "있어", "있나", "있지",
+    "보여줘", "알려줘", "찾아줘", "리스트", "목록", "전체", "명함", "이름",
+    "카드", "사람", "모두", "전부", "얼마나", "몇", "장수", "개수", "장", "명", "총", "개",
+    "내", "제", "다", "이", "야", "어", "지", "나",
+    "은", "는", "이야", "인가", "될까",
     "?", "!", ".", ",", " ",
 )
 
 internal fun isUnfilteredListAllQuestion(question: String): Boolean {
-    val hasGenericSignal = listOf("전체", "모두", "다 보여", "전부").any { it in question }
-    val hasTotalCountSignal = "총" in question && "몇" in question
-    if (!hasGenericSignal && !hasTotalCountSignal) return false
+    // 개수/목록을 묻는 말이 있어야 한다. 없으면 그냥 검색 질의다.
+    //
+    // 예전에는 "전체/모두/전부/총" 신호가 있어야만 통과시켰는데, 가장 자연스러운
+    // 표현들이 그 신호를 안 쓴다 — "내가 가진 명함 개수 몇개야?", "명함 몇 개 있어?"
+    // 가 전부 검색으로 빠져서 top-5 를 보고 "총 5명"이라 답했다(실기기 실측, 실제 1000).
+    // 신호 게이트를 없애고 **일반 단어를 다 걷어냈을 때 아무것도 안 남으면 전체**로 본다.
+    // 조건이 있으면("판교에 몇 명") 그 말이 안 걷혀서 남으므로 여기서 걸러진다.
+    if (!Regex("몇|목록|리스트|다 보여|얼마나|개수|장수|전체|전부|모두").containsMatchIn(question)) return false
     var stripped = question
     for (w in GENERIC_LIST_STRIP_WORDS) stripped = stripped.replace(w, "")
     return stripped.trim().isEmpty()
@@ -1281,18 +1290,25 @@ internal fun narrowByAnswer(
     if (agg != null && agg.groupValues[1].toIntOrNull() == 0) {
         return search.copy(results = emptyList()) to search.results.map { it.card.name }
     }
+    // **하드 필터를 통과한 카드는 답변이 뭐라 하든 지우지 않는다.**
+    //
+    // 필드 조건(이름/직함/지역)이 걸렸다는 건 검색이 이미 '조건을 만족하는 사람'만
+    // 남겼다는 뜻이라, 그 카드들은 정의상 답이다. LLM 이 그중 일부만 말했다고 나머지를
+    // 지우면 사용자가 답의 일부만 보게 된다.
+    // 실기기 실측: "대전에 있는 변호사 찾아줘" -> 검색은 탁예린·방우성 2명을 맞게 찾았는데
+    // 답변이 "탁예린" 한 명만 말해서 방우성이 잘렸다. 그 상태로 "두 번째 사람 연락처"를
+    // 물으면 두 번째가 아예 없다. 같은 질문에도 매번 달라져서 재현이 들쭉날쭉했다.
+    //
+    // 이 함수의 원래 목적(무관한 카드가 답변과 어긋나게 뜨는 것 방지)은 **조건이 없는**
+    // 질의에서만 필요하다 — "오늘 날씨 어때?" 는 필드 조건이 안 잡히므로 아래로 내려가
+    // 예전처럼 비워진다. 거절 답변은 위 두 분기에서 이미 걸러진다.
+    if (!search.fieldFilters.isEmpty) {
+        return search to emptyList()
+    }
     val mentioned = search.results.filter { cardReferencedIn(it.card, answer) }
     if (mentioned.isNotEmpty()) {
         val dropped = search.results.filterNot { it in mentioned }.map { it.card.name }
         return search.copy(results = mentioned) to dropped
-    }
-    // 이름으로 한 사람이 특정된 상태면 답변이 그 카드를 다시 인용하지 않아도 남긴다.
-    // 이 함수가 하는 일은 '후보 여럿 중 답변이 가리키는 사람 고르기'인데, 후보가 하나면
-    // 고를 게 없다. 실측 회귀: "직급은?" -> "AI 개발자", "부서는?" -> "데이터사이언스팀"
-    // 처럼 필드 값만 짧게 답하면 이름·회사·주소가 답변에 없어서 카드가 통째로 사라졌다
-    // (멀티턴에서 계속 사라짐). 거절 답변은 위 두 분기에서 이미 걸러진다.
-    if (search.fieldFilters.names.isNotEmpty() && search.results.size == 1) {
-        return search to emptyList()
     }
     if (agg == null) {
         return search.copy(results = emptyList()) to search.results.map { it.card.name }
@@ -1427,6 +1443,13 @@ private fun buildAnswerPrompt(
             append("- 지금 사용자 발화는 새 검색이 아니라 직전 답변에 대한 정정/확인/추가질문이다.\n")
             append("  아래 컨텍스트는 '직전 검색 결과'다. 이 사람들만 대상으로 짧게 답하라.\n")
             append("  사용자가 숫자나 사실을 정정했고 컨텍스트가 사용자 말과 맞으면 정정을 인정하라.\n")
+            // 무엇을 물었는지 **코드로 뽑아서** 알려준다. 규칙을 하나 더 얹는 게 아니라
+            // 이미 해석해 둔 의도를 전달하는 것이다 — 이게 없으면 "두 번째 사람 연락처"
+            // 처럼 속성을 명시해도 모델이 이름만 돌려줬다(실기기 실측). followup 분기가
+            // "짧게 답하라"로만 유도해서 무엇을 답할지가 비어 있었다.
+            attributeOf(question)?.let {
+                append("- 사용자가 물은 것은 '$it' 다. 그 값을 답하라(이름만 답하지 마라).\n")
+            }
         }
     }
     return "$rules\n${session.buildContextBlocks(question)}\n\n명함 컨텍스트:\n$ragContext"

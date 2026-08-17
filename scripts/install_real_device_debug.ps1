@@ -25,14 +25,25 @@ if (-not $SkipBuild) {
 }
 
 $apk = "app\build\outputs\apk\debug\app-debug.apk"
-$apkSize = (Get-Item $apk).Length / 1MB
-"APK: {0:N1} MB" -f $apkSize
-# 네이티브 라이브러리(litertlm/gecko/gemma 임베딩 등)가 88MB 쯤 된다. 이게 빠지면
-# APK 가 갑자기 작아지고 그 빌드는 LLM 이 안 뜬다 — OneDrive 파일 잠금으로
-# mergeDebugNativeLibs 가 조용히 실패한 전력이 있어서 크기로 감지한다.
-if ($apkSize -lt 130) {
-    Write-Warning "APK 가 130MB 미만입니다. 네이티브 라이브러리 누락 의심 — app/build 를 지우고 다시 빌드하세요."
-}
+"APK: {0:N1} MB" -f ((Get-Item $apk).Length / 1MB)
+
+# 네이티브 라이브러리가 빠진 APK 는 LLM 이 안 뜬다 — OneDrive 파일 잠금으로
+# mergeDebugNativeLibs 가 조용히 실패한 전력이 있다.
+# **총 크기로 판단하지 않는다.** 시드 데이터(카드 수)에 따라 총량이 크게 달라져서
+# 임계값이 금방 낡는다(5000장 -> 1000장으로 줄이자 16.9MB -> 3.4MB). 대신 결정적인
+# 파일이 실제로 들어갔는지 이름으로 확인한다.
+$required = @("liblitertlm_jni.so", "libgemma_embedding_model_jni.so")
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $apk))
+try {
+    $names = $zip.Entries | ForEach-Object { Split-Path $_.FullName -Leaf }
+    foreach ($lib in $required) {
+        if ($names -notcontains $lib) {
+            throw "$lib 가 APK 에 없습니다. app/build 를 지우고 다시 빌드하세요(OneDrive 잠금 의심)."
+        }
+    }
+    "네이티브 라이브러리 확인: $($required -join ', ')"
+} finally { $zip.Dispose() }
 
 & $adb devices -l
 & $adb install -r $apk
