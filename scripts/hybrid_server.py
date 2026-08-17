@@ -834,12 +834,14 @@ def rag_context(id_list, total_matches=None):
     shown = len(id_list)
     if not shown:
         return "검색 후보 없음"
-    if total_matches is None:
-        header = "검색 후보"
-    elif total_matches > shown:
+    # 개수는 **모델이 볼 수 없는 정보일 때만** 넣는다(총계 > 보여준 수).
+    # total == shown 이면 모델이 카드를 다 보고 있어서 개수를 알려줄 이유가 없는데,
+    # 넣으면 그 숫자를 답으로 옮겨 적는다(실측: "그 사람 부서는?" -> "총 1명").
+    # 이름으로 한 사람이 특정된 질의가 특히 그렇다 — 개수가 답이 아닌 질문이다.
+    if total_matches is not None and total_matches > shown:
         header = f"조건에 맞는 사람: 총 {total_matches}명 (아래는 그중 {shown}명)"
     else:
-        header = f"조건에 맞는 사람: 총 {total_matches}명"
+        header = "검색 후보"
     return header + "\n\n" + "\n\n".join(blocks)
 
 

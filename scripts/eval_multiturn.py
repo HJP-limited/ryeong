@@ -17,8 +17,11 @@
     python scripts/eval_multiturn.py
         1~3층. 생성을 건너뛰므로(dry-run) 180턴이 ~30초. 매 변경마다 돌리는 회귀망.
 
-    python scripts/eval_multiturn.py --generate --sample 20
+    python scripts/eval_multiturn.py --generate --sample 25
         4~5층. 실제로 답변을 만들어 체크리스트로 채점한다. 턴당 ~10초라 표본을 쓴다.
+        표본은 **유형별 층화 추출**이다 — 균등 무작위로 뽑으면 개수가 적은 유형이
+        통째로 빠져서, 지표는 1.000 인데 정작 최근 고친 것들이 한 번도 안 돌아간다
+        (실측: --sample 18 균등 추출에서 20종 중 12종 누락). 25 이상이면 전 유형이 들어간다.
         --repeat 3 을 주면 pass^3(3번 다 통과해야 인정)까지 낸다 — 샘플링 흔들림 때문에
         1~2개 차이로 순위를 매기면 안 된다는 문제를 지표에 반영하는 방법이다.
 
@@ -535,6 +538,49 @@ def run_pass(scenarios, dry_run, stats, failures, gap_failures):
     return scenario_pass
 
 
+def stratified_sample(scenarios, n, rng):
+    """
+    유형별 층화 추출 — **유형마다 최소 1개씩** 보장하고 남는 자리를 개수에 비례해 나눈다.
+
+    균등 무작위로 뽑았더니 20종 중 12종이 통째로 빠졌다(실측: --sample 18 로 돌린 결과에
+    문맥참조·대명사 체인·잡담 후 복귀·조건 누적·사실 정정 등이 0개). 개수가 적은 유형
+    (조건 누적 1개, 사실 정정 1개)은 거의 확실히 탈락하고 많은 유형(이름+생략형후속 25개)만
+    반복해서 뽑힌다. 그러면 지표는 1.000 이 나오는데 **정작 최근 고친 것들은 한 번도 안
+    돌아간다** — 표본이 무엇을 확인해 주는지가 뒤집힌다.
+
+    n 이 유형 수보다 작으면 전부는 못 담으므로, 그때는 개수가 적은(=희귀한) 유형부터
+    채운다. 흔한 유형은 어차피 다른 실행에서 반복해서 뽑힌다.
+    """
+    by_kind = defaultdict(list)
+    for sc in scenarios:
+        by_kind[sc["kind"]].append(sc)
+    for group in by_kind.values():
+        rng.shuffle(group)
+
+    # 희귀한 유형부터 1개씩
+    kinds = sorted(by_kind, key=lambda k: (len(by_kind[k]), k))
+    picked, cursor = [], {k: 0 for k in kinds}
+    for k in kinds:
+        if len(picked) >= n:
+            break
+        picked.append(by_kind[k][0])
+        cursor[k] = 1
+
+    # 남는 자리는 개수 비례로 라운드로빈
+    while len(picked) < n:
+        added = False
+        for k in sorted(kinds, key=lambda k: -len(by_kind[k])):
+            if len(picked) >= n:
+                break
+            if cursor[k] < len(by_kind[k]):
+                picked.append(by_kind[k][cursor[k]])
+                cursor[k] += 1
+                added = True
+        if not added:
+            break
+    return picked
+
+
 def new_stats():
     return {
         "route_ok": 0, "route_n": 0, "jga_ok": 0, "jga_n": 0,
@@ -552,15 +598,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--generate", action="store_true",
                     help="실제로 답변을 생성해 체크리스트까지 채점한다(턴당 ~10초)")
-    ap.add_argument("--sample", type=int, default=0, help="시나리오를 N개만 무작위 표본")
+    ap.add_argument("--sample", type=int, default=0,
+                    help="시나리오를 N개만 (유형별 층화 추출). 21종을 다 담으려면 25 이상")
     ap.add_argument("--repeat", type=int, default=1, help="k회 반복해 pass^k 를 낸다")
     ap.add_argument("--verbose", action="store_true", help="실패 건을 전부 출력")
+    ap.add_argument("--latency", action="store_true",
+                    help="생성 시간을 함께 출력한다. **실기기 지연이 아니라** LLM 서버를 "
+                         "띄운 데스크톱 성능이므로 성능 지표로 인용하지 말 것. "
+                         "같은 환경 안에서의 회귀 감지용")
     args = ap.parse_args()
 
     cards = json.loads(CARDS_PATH.read_text(encoding="utf-8"))
     scenarios = build_scenarios(cards, random.Random(SEED))
     if args.sample and args.sample < len(scenarios):
-        scenarios = random.Random(SEED).sample(scenarios, args.sample)
+        scenarios = stratified_sample(scenarios, args.sample, random.Random(SEED))
 
     dry_run = not args.generate
     try:
@@ -609,14 +660,27 @@ def main():
         if args.repeat > 1:
             print(f"  pass^{args.repeat}              {pct(len(always_pass), len(scenarios))}"
                   f"  ({len(always_pass)}/{len(scenarios)} 시나리오가 {args.repeat}번 모두 통과)")
-        if stats["gen_ms"]:
+        # 생성 시간은 기본 출력에서 뺀다. --latency 로만 본다.
+        #
+        # 이 값은 hybrid_server 가 9379 포트(litert-lm serve)로 HTTP 왕복하는 시간이라
+        # **그 서버를 띄운 데스크톱/노트북의 성능**이다. 우리 제품은 온디바이스 앱이고
+        # 목표 기기는 갤럭시 S21급인데, ARM+델리게이트·메모리 압박·발열 스로틀링 때문에
+        # 값이 전혀 다르다. 실기기 지연은 이 도구로 **측정할 수 없다**(폰은 앱 안의
+        # LiteRtLmChatEngine 이 네이티브로 모델을 직접 로드한다).
+        # 성능 지표로 인용되면 안 되므로 기본 출력에서 뺐다.
+        #
+        # 그래도 지우지 않은 이유: **같은 환경 안에서의 회귀 감지**에는 유효하다.
+        # 실제로 "후보 0장인데 LLM 을 부르던" 버그를 이 값으로 잡았다(10초 -> 0.2초).
+        # 프롬프트가 커지거나 불필요한 호출이 생기면 여기서 바로 드러난다.
+        if args.latency and stats["gen_ms"]:
             g = sorted(stats["gen_ms"])
+
             def q(f):
                 return g[min(len(g) - 1, max(0, int(round(f * (len(g) - 1)))))] / 1000
+
             # 평균만 보면 이상치에 끌려간다(실측: 평균 17.4초인데 P95 13.4초 —
             # 174건 중 9건이 ~98초였다. 웜업/부하 때문이지 평상시 지연이 아니다).
-            # 중앙값과 최댓값을 같이 찍어서 그런 상황을 바로 알아보게 한다.
-            print(f"  생성 시간 중앙/평균/P95/최대   "
+            print(f"  [개발환경 전용 · 실기기 아님] 생성 시간 중앙/평균/P95/최대   "
                   f"{q(0.5):.1f} / {sum(g)/len(g)/1000:.1f} / {q(0.95):.1f} / {g[-1]/1000:.1f}초")
 
     print("\n[유형별]  (n = 채점된 턴 수)")

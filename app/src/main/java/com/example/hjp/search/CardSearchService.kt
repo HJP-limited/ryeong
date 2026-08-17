@@ -96,11 +96,15 @@ data class CardSearchResponse(
         val taken = results.take(limit)
         if (taken.isEmpty()) return "검색 후보 없음"
         val blocks = taken.mapIndexed { i, hit -> "[${i + 1}번]\n${hit.card.ragContext()}" }
-        val header = when {
-            totalMatches == null -> "검색 후보"
-            totalMatches > taken.size -> "조건에 맞는 사람: 총 ${totalMatches}명 (아래는 그중 ${taken.size}명)"
-            else -> "조건에 맞는 사람: 총 ${totalMatches}명"
-        }
+        // 개수는 **모델이 볼 수 없는 정보일 때만** 넣는다(총계 > 보여준 수).
+        // total == shown 이면 모델이 카드를 다 보고 있어서 개수를 알려줄 이유가 없는데,
+        // 넣으면 그 숫자를 답으로 옮겨 적는다(실측: "그 사람 부서는?" -> "총 1명").
+        val header =
+            if (totalMatches != null && totalMatches > taken.size) {
+                "조건에 맞는 사람: 총 ${totalMatches}명 (아래는 그중 ${taken.size}명)"
+            } else {
+                "검색 후보"
+            }
         return "$header\n\n" + blocks.joinToString("\n\n")
     }
 
