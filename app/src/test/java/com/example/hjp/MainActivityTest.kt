@@ -533,4 +533,55 @@ class MainActivityTest {
         assertEquals(q, resolveCorrection(q, listOf("손서윤")))
         assertEquals(q, resolveCorrection(q, emptyList()))
     }
+
+    // ---- 한 사람에게 여러 칸을 물으면 코드가 조합해 답한다 ----
+
+    @Test
+    fun `여러 칸을 물으면 다 채워서 답한다`() {
+        // 실측: 2B 모델이 "회사와 이메일" 중 이메일만 답했다(4건). 값은 컨텍스트에 다 있었다.
+        val c = cardOf(company = "코랄글로벌", email = "a@b.kr", title = "CDO", department = "디자인팀")
+        assertEquals("회사: 코랄글로벌, 이메일: a@b.kr",
+            fieldListAnswer("두미영씨 회사와 이메일도 알려줘", listOf(c)))
+        assertEquals("회사: 코랄글로벌, 직급: CDO, 부서: 디자인팀",
+            fieldListAnswer("그 사람 회사, 직급, 부서를 알려줘", listOf(c)))
+    }
+
+    @Test
+    fun `지시 관형사 뒤의 명사는 요청이 아니다`() {
+        // "그 회사 주소는?" 은 주소 하나만 묻는 것이다. 이 구분이 없으면 '대명사 체인'
+        // 시나리오 7턴이 통째로 오탐된다(정적 확인).
+        assertEquals(listOf("주소"), requestedFields("그 회사 주소는?").map { it.second })
+        assertNull(fieldListAnswer("그 회사 주소는?", listOf(cardOf(company = "A", address = "B"))))
+        // 진짜로 둘을 물으면 걸린다.
+        assertEquals(listOf("주소", "전화번호"),
+            requestedFields("그 회사 주소랑 전화번호 알려줘").map { it.second })
+    }
+
+    @Test
+    fun `한 칸이면 LLM 에 맡긴다`() {
+        val c = cardOf(company = "코랄글로벌")
+        assertNull(fieldListAnswer("두미영씨 회사가 어디야?", listOf(c)))
+    }
+
+    @Test
+    fun `여러 칸 요청도 후보가 하나가 아니면 건드리지 않는다`() {
+        val c = cardOf(company = "A", email = "a@b.kr")
+        assertNull(fieldListAnswer("회사와 이메일 알려줘", listOf(c, cardOf())))
+        assertNull(fieldListAnswer("회사와 이메일 알려줘", emptyList()))
+    }
+
+    @Test
+    fun `빈 칸은 정보 없음으로 표시한다`() {
+        // 옆 칸 값으로 대체하던 결함의 여러 칸 버전이다.
+        val c = cardOf(company = "코랄글로벌")
+        assertEquals("회사: 코랄글로벌, 부서: 정보 없음",
+            fieldListAnswer("그 사람 회사와 부서 알려줘", listOf(c)))
+    }
+
+    @Test
+    fun `긴 명사가 짧은 명사를 이긴다`() {
+        // "이메일" 안의 "메일", "전화번호" 안의 "전화"가 먼저 잡히면 라벨이 잘린다.
+        assertEquals(listOf("전화번호", "이메일"),
+            requestedFields("전화번호랑 이메일 알려줘").map { it.second })
+    }
 }

@@ -1328,7 +1328,8 @@ private fun runChat(
         selectedIds.isNotEmpty()
     ) {
         val search = runCatching { searchService.searchByIds(selectedIds) }.getOrNull()
-        val answer = emptyFieldAnswer(question, search?.results?.map { it.card }.orEmpty())
+        val answer = fieldListAnswer(question, search?.results?.map { it.card }.orEmpty())
+            ?: emptyFieldAnswer(question, search?.results?.map { it.card }.orEmpty())
             ?: runCatching {
                 engine.generate(
                     buildAnswerPrompt(session, question, search?.ragContext(5).orEmpty(), followup = true)
@@ -1406,7 +1407,8 @@ private fun runChat(
     val totalMatches = runCatching { searchService.countByCondition(question)?.size }.getOrNull()
 
     return try {
-        val llmAnswer = emptyFieldAnswer(question, search.results.map { it.card })
+        val llmAnswer = fieldListAnswer(question, search.results.map { it.card })
+            ?: emptyFieldAnswer(question, search.results.map { it.card })
             ?: engine.generate(
                 buildAnswerPrompt(session, question, search.ragContext(5, totalMatches)))
         if (llmAnswer == LiteRtLmChatEngine.EMPTY_RESPONSE) {
@@ -1706,21 +1708,81 @@ private val ATTRIBUTE_FIELD = mapOf(
  * 후보가 정확히 1장일 때만 건다 — 여러 명이면 '그중 누구의 칸'인지 정해지지 않는다
  * (narrowByAnswer 4단계와 같은 원리).
  */
+
+/**
+ * 지시 관형사 뒤의 속성 명사는 **요청이 아니라 가리키는 말**이다.
+ * "그 회사 주소는?" 은 주소 하나만 묻는 것이지 회사를 함께 묻는 게 아니다
+ * (실측: 이 구분이 없으면 우리 시나리오 '대명사 체인' 7턴이 통째로 오탐된다).
+ */
+private val DEMONSTRATIVES = listOf("그", "이", "저")
+
+/** 질의에서 그 명사가 **요청으로** 쓰인 첫 위치. 없으면 -1. */
+private fun requestedPos(question: String, noun: String): Int {
+    var start = 0
+    while (true) {
+        val pos = question.indexOf(noun, start)
+        if (pos < 0) return -1
+        val before = question.substring(0, pos).trimEnd()
+        if (DEMONSTRATIVES.none { before.endsWith(it) }) return pos
+        start = pos + 1
+    }
+}
+
+/**
+ * 질의가 물은 속성들을 **말한 순서대로**, 필드 기준 중복 없이 돌려준다.
+ * '전화번호'가 '전화'·'번호'를 품는 식으로 명사가 겹치므로 **긴 명사부터** 본다 —
+ * 짧은 쪽이 먼저 잡히면 라벨이 잘려 나온다("메일: …").
+ */
+internal fun requestedFields(question: String): List<Pair<String, String>> {
+    val found = mutableListOf<Triple<Int, String, String>>()
+    for (noun in ATTRIBUTE_FIELD.keys.sortedByDescending { it.length }) {
+        val field = ATTRIBUTE_FIELD.getValue(noun)
+        if (found.any { it.second == field }) continue
+        val pos = requestedPos(question, noun)
+        if (pos >= 0) found.add(Triple(pos, field, noun))
+    }
+    return found.sortedBy { it.first }.map { it.second to it.third }
+}
+
+/**
+ * 한 사람에게 **여러 칸**을 물으면 코드가 직접 조합해 답한다.
+ *
+ * 실측(Final50 v3): "회사와 이메일도 알려줘" 에 2B 모델이 이메일만 답했다(4건).
+ * 값은 컨텍스트에 다 있는데 모델이 하나를 빠뜨리는 것이라 **검색·문맥 문제가 아니다.**
+ * 어느 칸을 물었는지도, 그 값이 무엇인지도 코드가 이미 안다
+ * (프롬프트 규칙 추가는 4전 4패다). 담화 지시 6/10 -> 10/10.
+ *
+ * 두 칸 이상일 때만 건다 — 한 칸짜리는 LLM 이 문장으로 답하게 둔다(자연스러움 유지).
+ * 후보가 정확히 1장일 때만 건다 — 여러 명이면 '누구의 칸'인지 안 정해진다.
+ */
+internal fun fieldListAnswer(question: String, cards: List<BusinessCardEntity>): String? {
+    if (cards.size != 1) return null
+    val fields = requestedFields(question)
+    if (fields.size < 2) return null
+    val card = cards[0]
+    return fields.joinToString(", ") { (field, noun) ->
+        val value = cardField(card, field)
+        if (value.isNullOrBlank()) "$noun: 정보 없음" else "$noun: $value"
+    }
+}
+
+private fun cardField(card: BusinessCardEntity, field: String): String? = when (field) {
+    "phone" -> card.phone
+    "email" -> card.email
+    "title" -> card.title
+    "company" -> card.company
+    "address" -> card.address
+    "location" -> card.location
+    "department" -> card.department
+    else -> null
+}
+
 internal fun emptyFieldAnswer(question: String, cards: List<BusinessCardEntity>): String? {
     if (cards.size != 1) return null
     val attr = attributeOf(question) ?: return null
     val field = ATTRIBUTE_FIELD[attr] ?: return null
     val card = cards[0]
-    val value = when (field) {
-        "phone" -> card.phone
-        "email" -> card.email
-        "title" -> card.title
-        "company" -> card.company
-        "address" -> card.address
-        "location" -> card.location
-        "department" -> card.department
-        else -> null
-    }
+    val value = cardField(card, field)
     if (!value.isNullOrBlank()) return null
     return "$attr 정보가 없습니다."
 }

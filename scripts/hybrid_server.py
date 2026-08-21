@@ -841,6 +841,69 @@ ATTRIBUTE_FIELD = {
 }
 
 
+# 지시 관형사 뒤의 속성 명사는 **요청이 아니라 가리키는 말**이다.
+# "그 회사 주소는?" 은 주소 하나만 묻는 것이지 회사를 함께 묻는 게 아니다
+# (실측: 이 구분이 없으면 우리 시나리오 '대명사 체인' 7턴이 통째로 오탐된다).
+_DEMONSTRATIVES = ("그", "이", "저")
+
+
+def _requested_pos(question: str, noun: str) -> int:
+    """질의에서 그 명사가 **요청으로** 쓰인 첫 위치. 없으면 -1."""
+    start = 0
+    while True:
+        pos = question.find(noun, start)
+        if pos < 0:
+            return -1
+        before = question[:pos].rstrip()
+        if not before.endswith(_DEMONSTRATIVES):
+            return pos
+        start = pos + 1
+
+
+def requested_fields(question: str):
+    """질의가 물은 속성들을 **말한 순서대로**, 필드 기준으로 중복 없이 돌려준다.
+
+    '전화번호'가 '전화'·'번호'를 품는 식으로 명사가 겹치므로 필드로 중복을 없앤다.
+    """
+    found = []
+    # **긴 명사부터** 본다 — "이메일" 안의 "메일", "전화번호" 안의 "전화"가 먼저 잡히면
+    # 라벨이 짧게 잘려 나온다("메일: ..."). 둘 다 같은 필드라 먼저 잡은 쪽이 이긴다.
+    for noun in sorted(ATTRIBUTE_FIELD, key=len, reverse=True):
+        field = ATTRIBUTE_FIELD[noun]
+        if any(f == field for _, f, _ in found):
+            continue
+        pos = _requested_pos(question, noun)
+        if pos >= 0:
+            found.append((pos, field, noun))
+    found.sort()
+    return [(f, n) for _, f, n in found]
+
+
+def field_list_answer(question: str, card_ids):
+    """
+    한 사람에게 **여러 칸**을 물으면 코드가 직접 조합해 답한다.
+
+    실측(Final50 v3): "회사와 이메일도 알려줘" 에 2B 모델이 이메일만 답했다(4건).
+    값은 컨텍스트에 다 있는데 모델이 하나를 빠뜨리는 것이라 **검색·문맥 문제가 아니다.**
+    프롬프트로 고치는 건 4전 4패라 시도하지 않는다 — 어느 칸을 물었는지도, 그 값이
+    무엇인지도 코드가 이미 안다.
+
+    두 칸 이상일 때만 건다. 한 칸짜리는 그대로 LLM 이 문장으로 답하게 둔다(자연스러움 유지).
+    후보가 정확히 1장일 때만 건다 — 여러 명이면 '누구의 칸'인지 안 정해진다.
+    """
+    if len(card_ids) != 1:
+        return None
+    fields = requested_fields(question)
+    if len(fields) < 2:
+        return None
+    card = CARDS_BY_ID.get(card_ids[0]) or {}
+    parts = []
+    for field, noun in fields:
+        value = str(card.get(field) or "").strip()
+        parts.append(f"{noun}: {value}" if value else f"{noun}: 정보 없음")
+    return ", ".join(parts)
+
+
 def empty_field_answer(question: str, card_ids):
     """
     대상이 하나로 정해졌는데 물어본 칸이 비어 있으면 결정적으로 '없다'고 답한다.
@@ -1259,7 +1322,8 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
         top_ids = selected_ids[:TOP_N]
         t = time.time()
         try:
-            answer = (empty_field_answer(question, top_ids)
+            answer = (field_list_answer(question, top_ids)
+                      or empty_field_answer(question, top_ids)
                       or call_gemma(build_prompt(memory, recent_pairs, question,
                                                  rag_context(top_ids), turn_id, followup=True)))
             err = None
@@ -1399,7 +1463,8 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
         answer, err = NO_MATCH_PHRASE, None
     else:
         try:
-            answer = (empty_field_answer(question, top_ids)
+            answer = (field_list_answer(question, top_ids)
+                      or empty_field_answer(question, top_ids)
                       or call_gemma(build_prompt(
                           memory, recent_pairs, question,
                           rag_context(top_ids, total_matches), turn_id)))
