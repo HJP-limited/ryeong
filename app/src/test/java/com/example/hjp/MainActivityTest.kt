@@ -1,5 +1,6 @@
 package com.example.hjp
 
+import com.example.hjp.agent.ConversationalFollowup
 import com.example.hjp.data.BusinessCardEntity
 import com.example.hjp.search.CardSearchHit
 import com.example.hjp.search.CardSearchResponse
@@ -341,5 +342,195 @@ class MainActivityTest {
             query = "q", engine = "test", retrieval = "keyword",
             keywordQuery = "q", semanticQuery = "q", results = hits,
         )
+    }
+
+    // ---- 기능 질문("뭐 할 줄 알아?") 우회 ----
+    // 전량 채점에서 이 질문이 검색으로 새서 컨텍스트 1등 이름을 답하고 카드까지 띄웠다.
+
+    @Test
+    fun `기능 질문을 잡아낸다`() {
+        listOf(
+            "너 뭐 할 줄 알아?", "뭘 할 줄 아니", "무엇을 할 수 있어?",
+            "할 수 있는 게 뭐야", "어떤 기능 있어?", "기능이 뭐야",
+        ).forEach { assertTrue(it, isCapabilityQuestion(it)) }
+    }
+
+    @Test
+    fun `명함 질문을 기능 질문으로 오인하지 않는다`() {
+        listOf(
+            "판교에 있는 개발자 찾아줘", "김서영씨 전화번호", "대전에 몇 명이야?",
+            "그 사람 부서는?", "돈 관리하는 사람 찾아줘",
+        ).forEach { assertFalse(it, isCapabilityQuestion(it)) }
+    }
+
+    @Test
+    fun `기능 질문은 자기참조보다 먼저 걸러야 한다`() {
+        // "너는 뭐 할 줄 알아?" 는 양쪽 패턴에 다 걸린다. runChat 이 기능 질문을 먼저 보므로
+        // 정체가 아니라 기능을 답해야 한다. 순서가 뒤집히면 이 단정이 깨진다.
+        val q = "너는 뭐 할 줄 알아?"
+        assertTrue(isCapabilityQuestion(q))
+        assertTrue(isSelfReferenceQuestion(q))
+    }
+
+    @Test
+    fun `기능 안내는 등록된 도구에서 파생된다`() {
+        val answer = buildCapabilityAnswer(listOf("일정 등록 화면을 엽니다.", "메일 작성 화면을 엽니다."))
+        assertTrue(answer.contains("명함을 찾습니다"))
+        assertTrue(answer.contains("일정 등록 화면을 엽니다."))
+        assertTrue(answer.contains("메일 작성 화면을 엽니다."))
+        // 도구가 없어도 검색 한 줄은 남아야 한다(빈 목록을 답으로 내보내지 않는다).
+        assertTrue(buildCapabilityAnswer(emptyList()).contains("명함을 찾습니다"))
+    }
+
+    // ---- 담화 순서 지시("처음에 물어본 사람") ----
+    // 직전 결과의 N번째를 고르는 ordinalIndex 와 다른 축이다. 최근 창(4턴) 밖 인물을
+    // 가리키므로 focus 치환으로는 못 닿는다.
+
+    private val subjects = "손다은,국은영,예예준,주주원,선현우"
+
+    @Test
+    fun `대화에서 처음 나온 사람을 가리킨다`() {
+        listOf(
+            "처음에 물어본 사람 전화번호는?",
+            "맨 처음 질문한 분 전화번호는?",
+            "첫 번째로 물어본 사람 전화번호는?",
+            "아까 처음에 물어본 분 전화번호는?",
+            "처음 언급한 사람 전화번호는?",
+            "가장 먼저 물어본 사람 전화번호는?",
+            "대화 맨 처음에 물어본 분 전화번호는?",
+            "두 사람 중 먼저 물어본 사람 회사와 이메일도 알려줘",
+        ).forEach {
+            val out = resolveDiscourseReference(it, subjects, prevCardCount = 1)
+            assertTrue("$it -> $out", out.startsWith("손다은"))
+        }
+    }
+
+    @Test
+    fun `담화 지시를 풀어도 물어본 속성은 남는다`() {
+        // 이름만 남기고 속성을 지워버리면 "손다은" 만 답하게 된다(carryOverAttribute 회귀와 같은 증상).
+        val out = resolveDiscourseReference("처음에 물어본 사람 전화번호는?", subjects, prevCardCount = 1)
+        assertTrue(out, out.contains("전화번호"))
+    }
+
+    @Test
+    fun `직전 결과가 여러 장이면 순서 지시는 그 목록을 가리킨다`() {
+        // "두 번째 사람" 은 담화 단서가 없다. 고를 후보가 있으면 기존 ordinalIndex 경로가 맞다.
+        val q = "두 번째 사람 연락처"
+        assertEquals(q, resolveDiscourseReference(q, subjects, prevCardCount = 5))
+    }
+
+    @Test
+    fun `이름이 이미 있으면 건드리지 않는다`() {
+        val q = "국은영씨 처음 회사가 어디야?"
+        assertEquals(q, resolveDiscourseReference(q, subjects, prevCardCount = 1))
+    }
+
+    @Test
+    fun `가리킬 인물이 없으면 원문 그대로다`() {
+        val q = "처음에 물어본 사람 전화번호는?"
+        assertEquals(q, resolveDiscourseReference(q, null, prevCardCount = 0))
+        assertEquals(q, resolveDiscourseReference(q, "", prevCardCount = 0))
+    }
+
+    @Test
+    fun `화제 인물은 순서를 지키며 중복 없이 쌓인다`() {
+        var acc = appendSubject(null, "손다은")
+        acc = appendSubject(acc, "국은영")
+        acc = appendSubject(acc, "손다은")   // 이미 나온 사람은 순서를 바꾸지 않는다
+        assertEquals("손다은,국은영", acc)
+    }
+
+    @Test
+    fun `사람을 가리키는 되짚기 표현은 문맥응답이 아니다`() {
+        // "아까"가 붙었다고 되짚기가 아니다. 사람을 가리키면 그 사람에 대한 새 질문이다.
+        listOf(
+            "아까 그 사람 회사, 직급, 부서를 알려줘",
+            "아까부터 물어본 그분의 회사 알려줘",
+            "방금 그 사람 연락처는?",
+        ).forEach { assertTrue(it, ConversationalFollowup.pointsAtPerson(it)) }
+    }
+
+    @Test
+    fun `속성을 되짚는 표현은 그대로 문맥응답이다`() {
+        // 이쪽이 contextAnswer 가 원래 담당하던 발화다. 위 완화가 이걸 죽이면 안 된다.
+        listOf(
+            "아까 말한 회사 뭐였지",
+            "방금 찾은 거 뭐였어",
+            "앞서 말한 주소 기억나?",
+        ).forEach { assertFalse(it, ConversationalFollowup.pointsAtPerson(it)) }
+    }
+
+    // ---- 빈 칸을 물었을 때 옆 칸으로 대체하지 않는다 ----
+
+    private fun cardOf(company: String = "", title: String = "", department: String = "",
+                       phone: String = "", email: String = "", address: String = "") =
+        BusinessCardEntity(
+            "x1", "빈칸", "", company, title, department, "", "", phone, email, address, "", "", 0L,
+        )
+
+    @Test
+    fun `물어본 칸이 비어 있으면 없다고 답한다`() {
+        // 실측: 컨텍스트에 그 칸만 없고 나머지가 차 있으면 2B 모델이 옆 칸 값을 갖다 붙였다
+        // (회사를 물었는데 부서를, 직급을 물었는데 부서를).
+        val c = cardOf(department = "국내영업팀", address = "제주특별자치도 제주시")
+        assertEquals("회사 정보가 없습니다.", emptyFieldAnswer("그 사람 회사는?", listOf(c)))
+        assertEquals("직급 정보가 없습니다.", emptyFieldAnswer("그 사람 직급은?", listOf(c)))
+    }
+
+    @Test
+    fun `값이 있으면 LLM 에 맡긴다`() {
+        val c = cardOf(company = "코랄글로벌", department = "개발2팀")
+        assertNull(emptyFieldAnswer("그 사람 회사는?", listOf(c)))
+        assertNull(emptyFieldAnswer("그 사람 부서는?", listOf(c)))
+    }
+
+    @Test
+    fun `후보가 하나가 아니면 건드리지 않는다`() {
+        // 여러 명이면 '그중 누구의 칸'인지 정해지지 않는다.
+        val c = cardOf(department = "국내영업팀")
+        assertNull(emptyFieldAnswer("그 사람 회사는?", listOf(c, cardOf(company = "있음"))))
+        assertNull(emptyFieldAnswer("그 사람 회사는?", emptyList()))
+    }
+
+    @Test
+    fun `속성을 안 물었으면 건드리지 않는다`() {
+        assertNull(emptyFieldAnswer("판교에 있는 개발자 찾아줘", listOf(cardOf())))
+        assertNull(emptyFieldAnswer("오늘 날씨 어때?", listOf(cardOf())))
+    }
+
+    // ---- 대상 정정("A가 아니라 B야") ----
+
+    @Test
+    fun `정정하면 뒤에 말한 사람으로 바뀐다`() {
+        val out = resolveCorrection(
+            "정정할게. 손서윤씨가 아니라 남다은씨야. 그분 회사는 어디야?",
+            listOf("손서윤", "남다은"),
+        )
+        assertTrue(out, out.startsWith("남다은"))
+        assertFalse("옛 대상이 남음: $out", out.contains("손서윤"))
+        assertFalse("대명사가 남음: $out", out.contains("그분"))
+        assertTrue("요청이 사라짐: $out", out.contains("회사"))
+    }
+
+    @Test
+    fun `추출 순서가 아니라 발화 위치 순으로 본다`() {
+        // knownNames 가 어떤 순서로 오든 '나중에 말한 쪽'이 정정된 대상이다.
+        val q = "공성민씨 말고 추시우씨야. 그 사람 부서는?"
+        assertTrue(resolveCorrection(q, listOf("추시우", "공성민")).startsWith("추시우"))
+        assertTrue(resolveCorrection(q, listOf("공성민", "추시우")).startsWith("추시우"))
+    }
+
+    @Test
+    fun `정정 표지가 없으면 손대지 않는다`() {
+        val q = "손서윤씨와 남다은씨 회사 알려줘"
+        assertEquals(q, resolveCorrection(q, listOf("손서윤", "남다은")))
+    }
+
+    @Test
+    fun `이름이 하나뿐이면 손대지 않는다`() {
+        // 고를 대상이 없다. "그 사람 말고 다른 사람" 같은 발화를 망가뜨리지 않는다.
+        val q = "손서윤씨 말고 회사 알려줘"
+        assertEquals(q, resolveCorrection(q, listOf("손서윤")))
+        assertEquals(q, resolveCorrection(q, emptyList()))
     }
 }

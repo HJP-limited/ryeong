@@ -117,6 +117,27 @@ SELF_REFERENCE_PATTERNS = (
 )
 SELF_REFERENCE_ANSWER = "저는 명함 검색을 도와드리는 온디바이스 AI 어시스턴트입니다."
 
+# "너 뭐 할 줄 알아?" 같은 기능 질문 — 자기참조와 같은 이유로 결정적으로 우회한다.
+# 실측(전량 채점): 검색에 태우면 컨텍스트 1등을 답으로 뱉었다("너 뭐 할 줄 알아?" -> "이현",
+# 카드 1장). '무관 요청 카드 억제' 실패 1건이 이 계열이었다.
+# 자기참조보다 **먼저** 판정해야 한다 — "너는 뭐 할 줄 알아?" 는 "너는 뭐" 에도 걸린다.
+CAPABILITY_PATTERNS = (
+    "뭐 할 줄", "뭘 할 줄", "무엇을 할 줄", "뭐할 줄", "뭘할 줄",
+    "뭐 할 수", "뭘 할 수", "무엇을 할 수", "할 수 있는 게", "할 수 있는게",
+    "어떤 기능", "기능이 뭐", "기능 뭐", "뭐 도와", "뭘 도와", "어떻게 쓰는",
+)
+# Kotlin 은 이 목록을 ToolRegistry.capabilityLabels() 로 도구에서 파생한다.
+# 여기(거울)에는 레지스트리가 없어 같은 문장을 적어 둔다. 도구를 추가하면 양쪽을 같이 고칠 것.
+CAPABILITY_TOOL_LABELS = (
+    "기기의 캘린더 앱에 일정 등록 화면을 엽니다.",
+    "메일 또는 문자(SMS) 작성 화면을 초안이 채워진 상태로 엽니다.",
+)
+CAPABILITY_ANSWER = (
+    "저는 명함 검색을 도와드리는 온디바이스 AI 어시스턴트입니다. 이런 걸 할 수 있어요:\n"
+    + "\n".join(["- 이름·회사·지역·직함으로 명함을 찾습니다."]
+                + ["- " + t for t in CAPABILITY_TOOL_LABELS])
+)
+
 # "전체 몇 장/명" 같이 조건 없이 전체를 묻는 질문 — 결정적으로 우회한다.
 # 검색은 항상 top-N(5명)까지만 후보를 채우므로, 이런 질문을 그냥 검색에 태우면
 # "총 5명"이라고 답해버린다(실측: 60장인데 5명이라고 답함) — top-5를 전체로 착각하게
@@ -484,6 +505,11 @@ CONTEXT_REFERENCES = ("아까", "방금", "앞서", "이전", "말한", "찾은"
 EXPLICIT_SEARCH_INTENT = ("검색", "찾아줘", "찾아 줘", "조회", "최신", "새로")
 
 
+# 사람을 가리키는 지시어. 되짚기("아까 말한 회사 뭐였지")와 가르는 기준이다.
+PERSON_DEIXIS = ("그 사람", "그사람", "그 분", "그분", "이 사람", "이사람",
+                 "저 사람", "저사람", "이 분", "이분", "걔")
+
+
 def context_answer(memory: dict, recent_pairs, question: str):
     """
     문맥을 가리키는 발화이고 새로 검색하라는 말이 없으면, 검색을 건너뛰고 이미 아는 것으로
@@ -496,6 +522,12 @@ def context_answer(memory: dict, recent_pairs, question: str):
     """
     q = question or ""
     if not any(m in q for m in CONTEXT_REFERENCES):
+        return None
+    # **사람을 가리키면 되짚기가 아니라 그 사람에 대한 새 질문이다.**
+    # "아까 말한 회사 뭐였지"(되짚기)와 "아까 그 사람 회사 알려줘"(새 질문)를 가른다.
+    # 대명사를 CONTEXT_REFERENCES 에서 뺐어도 "아까"가 남아 여기로 새고 있었다
+    # (실측: Final50 v3 에서 sc_03·sc_08·lr_04·er_04 가 전부 이 경로였다).
+    if any(d in q for d in PERSON_DEIXIS):
         return None
     if any(m in q for m in EXPLICIT_SEARCH_INTENT):
         return None
@@ -520,6 +552,13 @@ def context_answer(memory: dict, recent_pairs, question: str):
         if previous:
             return f"이전 대화 기준으로 답변합니다.\n{previous}"
     return None
+
+
+def is_capability_question(question: str) -> bool:
+    q = question.strip().lower()
+    if not q:
+        return False
+    return any(p in q for p in CAPABILITY_PATTERNS)
 
 
 def is_self_reference_question(question: str) -> bool:
@@ -634,6 +673,120 @@ def count_by_known_condition(question: str, gazetteer):
 NARROWING_MARKERS = ("그중", "그 중", "거기서", "그 안에서", "그것들 중")
 
 
+# ---- 담화 순서 지시("처음에 물어본 사람") ----
+# 직전 결과의 N번째를 고르는 ordinal_index 와 **다른 것**이다. 이쪽은 '대화에서 N번째로
+# 화제가 된 사람'이라, 가리키는 대상이 직전 카드 목록이 아니라 지난 발화들이다.
+#
+# 실측(HJP-limited/ymj Final50 v3 벤치마크): 이 처리가 없으면 "처음에 물어본 사람
+# 전화번호는?" 이 **새 검색**으로 빠지고 "처음/물어본/사람"이 검색어가 돼 시나리오에
+# 없는 사람을 데려온다(long_range_reactivation 0/10, discourse_coreference 0/10).
+# 최근 창(4턴) 밖으로 밀려난 인물이라 focus 치환으로도 닿지 않는다.
+DISCOURSE_VERBS = ("물어본", "물어봤", "질문한", "질문했", "언급한", "언급했",
+                   "확인한", "확인했", "말한", "말했", "등장한", "나온")
+DISCOURSE_FIRST = ("맨 처음", "처음에", "처음", "가장 먼저", "먼저")
+DISCOURSE_HINTS = DISCOURSE_VERBS + DISCOURSE_FIRST + ("대화",)
+# 이름을 앞에 붙인 뒤 남으면 검색어를 오염시키는 말들.
+DISCOURSE_STRIP = DISCOURSE_HINTS + (
+    # 시간 부사를 남기면 아래 context_answer 가 "아까"를 보고 되짚기로 오인해
+    # 직전 답변을 재생한다(실측: "아까 처음에 물어본 분 전화번호는?" -> 엉뚱한 번호).
+    "아까", "방금", "앞서",
+    "그분", "그 분", "사람", "분", "대화에서", "두 사람", "중", "맨", "가장",
+    "첫 번째로", "첫 번째", "첫번째", "번째로", "번째", "그", "했던", "던",
+)
+
+
+def discourse_subjects(history, gazetteer):
+    """지난 발화에 등장한 인물을 **말한 순서대로** 모은다(중복 제거)."""
+    subjects = []
+    for h in history or []:
+        q = (h or {}).get("q") or ""
+        try:
+            names = (ev.extract_field_filters(q, gazetteer) or {}).get("name") or []
+        except Exception:  # noqa: BLE001
+            names = []
+        for n in names:
+            if n not in subjects:
+                subjects.append(n)
+    return subjects
+
+
+# 대상 정정("A가 아니라 B야") 표지.
+CORRECTION_MARKERS = ("아니라", "말고", "정정", "아니고")
+
+
+def resolve_correction(question: str, gazetteer):
+    """
+    "손서윤씨가 아니라 남다은씨야. 그분 회사는?" 처럼 **대상을 바꾸는** 발화를
+    정정된 사람에 대한 질의로 다시 쓴다.
+
+    실측(Final50 v3 explicit_target_correction): 이게 없으면 두 이름이 **둘 다** 이름
+    조건으로 잡히고, 대명사('그분')는 resolve_query 가 **옛 focus**로 치환해 버린다
+    (resolved='… 남다은씨야. 손서윤 회사는 어디야?'). 그러면 focus 가 옛 대상에 머물러
+    **그 뒤 모든 턴이 틀린 사람을 답한다**(4턴짜리 시나리오가 통째로 무너진다).
+
+    정정 표지가 있고 아는 이름이 둘 이상일 때만 건다 — 마지막에 말한 이름이 정정된 대상이다.
+    """
+    if not any(m in question for m in CORRECTION_MARKERS):
+        return question
+    try:
+        names = (ev.extract_field_filters(question, gazetteer) or {}).get("name") or []
+    except Exception:  # noqa: BLE001
+        return question
+    if len(names) < 2:
+        return question
+    # 질의에 나타난 **위치** 순으로 본다(추출 순서가 아니라).
+    ordered = sorted(names, key=lambda n: question.find(n))
+    target = ordered[-1]
+    # 정정 뒤의 실제 요청만 남긴다. 마지막 문장이 그 요청이다.
+    tail = question
+    for sep in (".", "!", "?"):
+        parts = [p for p in tail.split(sep) if p.strip()]
+        if len(parts) > 1:
+            tail = parts[-1]
+    # 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
+    for n in ordered[:-1]:
+        tail = tail.replace(n + "씨", " ").replace(n, " ")
+    for p in PRONOUNS:
+        tail = tail.replace(p, " ")
+    tail = re.sub(r"\s+", " ", tail).strip()
+    return f"{target} {tail}".strip()
+
+
+def resolve_discourse_reference(question: str, history, prev_card_ids, gazetteer):
+    """담화 순서로 사람을 가리키면 그 이름을 넣어 질의를 다시 쓴다. 아니면 원문 그대로."""
+    if not history:
+        return question
+    # 이름이 이미 있으면 지시가 아니다.
+    try:
+        if ((ev.extract_field_filters(question, gazetteer) or {}).get("name") or []):
+            return question
+    except Exception:  # noqa: BLE001
+        pass
+
+    idx = None
+    if any(h in question for h in DISCOURSE_HINTS):
+        idx = 0 if any(f in question for f in DISCOURSE_FIRST) else ordinal_index(question)
+    elif ordinal_index(question) is not None and len([c for c in (prev_card_ids or []) if c in CARDS_BY_ID]) < 2:
+        # "첫 번째 사람" 처럼 담화 단서가 없는 순서 지시. 직전 결과가 0~1장이면 거기서
+        # 고를 게 없으므로 대화 순서를 가리키는 말로 읽는다(narrow_by_answer 4단계와 같은 원리).
+        idx = ordinal_index(question)
+    if idx is None:
+        return question
+
+    subjects = discourse_subjects(history, gazetteer)
+    if not subjects:
+        return question
+    name = subjects[-1] if idx < 0 else (subjects[idx] if idx < len(subjects) else None)
+    if not name:
+        return question
+
+    rest = question
+    for w in sorted(DISCOURSE_STRIP, key=len, reverse=True):
+        rest = rest.replace(w, " ")
+    rest = re.sub(r"\s+", " ", rest).strip()
+    return f"{name} {rest}".strip()
+
+
 def apply_narrowing(question: str, previous_terms):
     """
     점진적 좁히기 — 앞 턴의 조건을 이어받는다. Kotlin applyNarrowing 과 같은 규칙.
@@ -673,6 +826,44 @@ def carry_over_attribute(question: str, last_attribute):
 def attribute_of(question: str):
     """이번 턴이 물어본 속성을 뽑는다(다음 턴이 생략했을 때 이어받으려고)."""
     return next((n for n in ATTRIBUTE_NOUNS if n in (question or "")), None)
+
+
+# 속성 명사 -> 카드 필드. 물어본 칸이 실제로 비어 있으면 LLM 을 부르지 않는다.
+# ('이름'은 비는 일이 없어 뺀다.)
+ATTRIBUTE_FIELD = {
+    "전화번호": "phone", "전화": "phone", "번호": "phone", "연락처": "phone",
+    "핸드폰": "phone", "휴대폰": "phone",
+    "메일": "email", "이메일": "email",
+    "직급": "title", "직함": "title", "직책": "title",
+    "회사": "company", "소속": "company",
+    "주소": "address", "위치": "address", "지역": "location",
+    "부서": "department",
+}
+
+
+def empty_field_answer(question: str, card_ids):
+    """
+    대상이 하나로 정해졌는데 물어본 칸이 비어 있으면 결정적으로 '없다'고 답한다.
+
+    실측(Final50 v3 unanswerable): 빈 칸을 그냥 물으면 2B 모델이 **옆 칸 값으로 대체**했다 —
+    회사를 물었는데 "국내영업팀입니다"(부서), "제주특별자치도 제주시"(주소), 직급을 물었는데
+    "생산관리팀입니다"(부서). 컨텍스트에 그 칸만 없을 뿐 다른 값이 다 들어 있으니
+    모델이 가장 그럴듯한 걸 골라 채운다. 값이 없다는 건 **코드가 이미 아는 사실**이라
+    모델에 맡길 이유가 없다(프롬프트 규칙 추가는 4전 4패다).
+
+    후보가 정확히 1장일 때만 건다 — 여러 명이면 '그중 누구의 칸'인지 정해지지 않는다
+    (narrow_by_answer 4단계와 같은 원리).
+    """
+    if len(card_ids) != 1:
+        return None
+    attr = attribute_of(question)
+    field = ATTRIBUTE_FIELD.get(attr) if attr else None
+    if not field:
+        return None
+    card = CARDS_BY_ID.get(card_ids[0]) or {}
+    if str(card.get(field) or "").strip():
+        return None
+    return f"{attr} 정보가 없습니다."
 
 
 def resolve_query(question: str, focus):
@@ -1005,6 +1196,13 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
         None,
     )
     question = apply_narrowing(question, prev_terms)
+    # '처음에 물어본 사람' 처럼 대화 순서로 사람을 가리키면 그 이름으로 다시 쓴다.
+    # **ordinal_index 블록보다 먼저** 해야 한다 — 뒤에 두면 '첫 번째 사람'이 직전 카드
+    # 목록의 1번을 고르는 쪽으로 새서 대화 순서를 못 본다.
+    question = resolve_discourse_reference(question, history, prev_card_ids, GAZETTEER)
+    # 대상 정정은 대명사 치환(resolve_query)보다 **먼저** 푼다 — 뒤에 두면 '그분'이
+    # 이미 옛 focus 로 바뀐 뒤라 정정이 무시된다.
+    question = resolve_correction(question, GAZETTEER)
 
     turn_id = uuid.uuid4().hex
     now_ms = int(time.time() * 1000)
@@ -1015,6 +1213,11 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
     # 명함 검색과 무관한 자기참조 질문("너는 누구야?")은 결정적으로 우회한다.
     # 실측: 프롬프트 규칙에만 맡기면 "너"를 명함 속 인물로 오인해서 관계없는 사람
     # 이름을 그대로 답했다(예: "너는 누구야?" -> "유유진").
+    # 기능 질문은 자기참조보다 먼저 본다("너는 뭐 할 줄 알아?" 가 양쪽에 걸린다).
+    if is_capability_question(question):
+        return _deterministic_reply(question, focus, memory, turn_id, now_ms, history, CAPABILITY_ANSWER,
+                                    route="capability")
+
     if is_self_reference_question(question):
         return _deterministic_reply(question, focus, memory, turn_id, now_ms, history, SELF_REFERENCE_ANSWER,
                                     route="self_reference")
@@ -1056,7 +1259,9 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
         top_ids = selected_ids[:TOP_N]
         t = time.time()
         try:
-            answer = call_gemma(build_prompt(memory, recent_pairs, question, rag_context(top_ids), turn_id, followup=True))
+            answer = (empty_field_answer(question, top_ids)
+                      or call_gemma(build_prompt(memory, recent_pairs, question,
+                                                 rag_context(top_ids), turn_id, followup=True)))
             err = None
         except Exception as e:  # noqa: BLE001
             answer, err = "", f"{type(e).__name__}: {e}"
@@ -1194,8 +1399,10 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
         answer, err = NO_MATCH_PHRASE, None
     else:
         try:
-            answer = call_gemma(build_prompt(
-                memory, recent_pairs, question, rag_context(top_ids, total_matches), turn_id))
+            answer = (empty_field_answer(question, top_ids)
+                      or call_gemma(build_prompt(
+                          memory, recent_pairs, question,
+                          rag_context(top_ids, total_matches), turn_id)))
             err = None
         except Exception as e:  # noqa: BLE001
             answer, err = "", f"{type(e).__name__}: {e}"

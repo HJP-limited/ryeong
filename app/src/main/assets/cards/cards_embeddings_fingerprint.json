@@ -1,0 +1,17 @@
+{
+  "cards_file": "cards_eval1000.json",
+  "count": 1000,
+  "embedding_input_sha256": "e86d8a6e25ef66a735253a15754961d277f48a8731ab89a8044d6870a06aed96",
+  "answer_sha256": "760e980afda23a30a83b333861fb0b0eab74b704208a0bf75ab674259dd47e05",
+  "fields": [
+    "name",
+    "nameEn",
+    "company",
+    "title",
+    "department",
+    "industry",
+    "location",
+    "memo",
+    "tags"
+  ]
+}

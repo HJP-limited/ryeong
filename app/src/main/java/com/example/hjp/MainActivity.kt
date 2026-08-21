@@ -1,6 +1,10 @@
 package com.example.hjp
 
+import com.example.hjp.agent.tools.OpenComposeTool
+import com.example.hjp.agent.tools.CreateCalendarEventTool
+import com.example.hjp.agent.tools.ToolRegistry
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -76,6 +80,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        intent?.getStringExtra("q")?.let { q ->
+            android.util.Log.i(DIAG_TAG, "onCreate q=$q")
+            DebugQuestion.offer(q)
+            intent.removeExtra("q")
+        }
 
         val searchService = CardSearchService(applicationContext)
 
@@ -89,6 +98,32 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    /**
+     * 이미 떠 있는 액티비티에 질문을 더 밀어 넣는다. launchMode=singleTop 이라 액티비티가
+     * 다시 만들어지지 않으므로 **멀티턴 세션이 유지된다** — 이게 없으면 질문마다 세션이
+     * 초기화돼서 후속 발화("그 사람 부서는?")를 시험할 수가 없다.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val q = intent.getStringExtra("q")
+        android.util.Log.i(DIAG_TAG, "onNewIntent q=$q")
+        DebugQuestion.offer(q)
+    }
+
+    /**
+     * onNewIntent 가 안 오는 경우(런처 플래그·태스크 상태에 따라 다르다)를 대비한 폴백.
+     * 같은 인텐트를 두 번 처리하지 않도록 소비한 extra 는 지운다.
+     */
+    override fun onResume() {
+        super.onResume()
+        intent?.getStringExtra("q")?.let { q ->
+            android.util.Log.i(DIAG_TAG, "onResume q=$q")
+            intent.removeExtra("q")
+            DebugQuestion.offer(q)
+        }
+    }
 }
 
 private enum class AppTab(val label: String) {
@@ -97,9 +132,48 @@ private enum class AppTab(val label: String) {
     Models("모델"),
 }
 
+/** 실기기 진단 로그 태그. `adb logcat -s HJP` 로 본다. */
+private const val DIAG_TAG = "HJP"
+
+/**
+ * 디버그용 질문 주입구.
+ *
+ * `adb shell input text` 가 한글을 못 쳐서(NullPointerException) 실기기에서 시나리오를
+ * 자동으로 태울 방법이 없었다. 인텐트로 질문을 받아 여기로 흘려보내면 화면의 전송
+ * 버튼과 똑같은 경로를 타고, **세션이 유지되므로 멀티턴도 그대로 된다**:
+ *
+ *     adb shell am start -n com.example.hjp/.MainActivity --es q "대전에 있는 변호사 찾아줘"
+ *     adb shell am start -n com.example.hjp/.MainActivity --es q "두 번째 사람 연락처"
+ *
+ * 결과는 DIAG_TAG 로그로 나온다. 운영 동작에는 영향이 없다(인텐트가 없으면 아무 일도
+ * 안 한다). replay=0 이라 화면 회전 등으로 다시 구독해도 옛 질문이 재실행되지 않는다.
+ */
+internal object DebugQuestion {
+    /**
+     * 대기 중인 질문. **SharedFlow 가 아니라 상태로 들고 있는다** — 흘려보내는 방식은
+     * 채팅 화면이 아직 안 떠 있으면 구독자가 없어 그냥 버려졌다(실측: 명함 탭에 있을 때
+     * 인텐트가 조용히 무시됨). 상태로 두면 탭 전환 -> 화면 구성 -> 처리 순서가 보장된다.
+     */
+    var pending by mutableStateOf<String?>(null)
+        private set
+
+    fun offer(question: String?) {
+        if (!question.isNullOrBlank()) pending = question.trim()
+    }
+
+    fun consume() {
+        pending = null
+    }
+}
+
 private data class ChatResult(
     val answer: String,
     val search: CardSearchResponse?,
+    /**
+     * 어느 처리 경로로 갔는지 — 진단 로그와 실기기/노트북 대조에 쓴다.
+     * hybrid_server.py 의 "route" 필드와 같은 이름을 쓴다(양쪽 비교가 목적).
+     */
+    val route: String? = null,
     val error: String? = null,
     val modelLabel: String? = null,
     /** 재검색 없이 직전 결과를 근거로 답한 턴인가(정정/확인/복수지시 발화). */
@@ -125,11 +199,22 @@ fun HjpApp(
     initialChatLlmStatus: String,
 ) {
     var selectedTab by remember { mutableStateOf(AppTab.Cards) }
+    // 디버그 인텐트로 질문이 들어오면 채팅 화면으로 옮긴다 — 그 화면이 떠 있어야
+    // 질문이 처리된다(adb 로 탭을 누르는 건 기기에서 잘 안 먹혔다).
+    LaunchedEffect(DebugQuestion.pending) {
+        if (DebugQuestion.pending != null) selectedTab = AppTab.Chat
+    }
     var toolLlmStatus by remember { mutableStateOf(initialToolLlmStatus) }
     var chatLlmStatus by remember { mutableStateOf(initialChatLlmStatus) }
 
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        // imePadding 은 **Scaffold 에** 건다. 화면 쪽 Column 에 걸면 Scaffold 가 이미 준
+        // 하단 탭바 높이 패딩 위에 키보드 높이가 또 더해져서, 입력창이 키보드보다
+        // 탭바 높이만큼 위로 떠 채팅 내용이 가려진다(실기기에서 확인).
+        // 여기에 걸면 탭바까지 함께 올라가고 입력창이 키보드에 붙는다.
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding(),
         bottomBar = {
             NavigationBar {
                 AppTab.entries.forEach { tab ->
@@ -275,6 +360,125 @@ private fun ChatScreen(
     }
     val listState = rememberLazyListState()
 
+    // 질문 하나를 처리한다. 화면의 전송 버튼과 **디버그 인텐트**가 같이 쓴다.
+    //
+    // 인텐트 진입점을 둔 이유: `adb shell input text` 가 한글을 못 친다
+    // (NullPointerException). 그래서 실기기에서 무엇이 일어나는지 확인하려면 사람이
+    // 손으로 타이핑하는 수밖에 없었다. 아래 DebugQuestion 으로 밀어 넣으면
+    // 노트북에서 시나리오를 그대로 태울 수 있고, 세션이 유지되므로 멀티턴도 된다.
+    fun send(question: String) {
+        if (question.isBlank()) return
+            messages.add(ChatMessage(isUser = true, text = question))
+            // 턴 시작을 구조화 메모리에 걸어둔다 — 이 턴이 끝까지 완료되지 못해도
+            // (예외 등) 다음 턴에서 "아직 처리 못한 요청"으로 남는다.
+            val turnId = java.util.UUID.randomUUID().toString()
+            session.beginTurn(turnId, question)
+            scope.launch {
+                asking = true
+                val startedAt = System.currentTimeMillis()
+                val result = withContext(Dispatchers.IO) {
+                    runChat(context, searchService, question, session)
+                }
+                asking = false
+                // 실기기 진단 로그. `adb logcat -s HJP` 로 본다.
+                //
+                // 이게 없을 때는 폰에서 무슨 일이 일어나는지 전혀 볼 수 없었다 —
+                // 크래시만 보이고 어느 경로로 갔는지, 어떤 조건이 잡혔는지, 얼마나
+                // 걸렸는지가 안 보여서 화면을 눈으로 읽는 수밖에 없었다.
+                // 노트북 서버(hybrid_server.py)가 내는 항목과 **같은 이름**을 쓴다 —
+                // 양자화 임베딩 때문에 폰과 노트북의 검색 순위가 갈릴 수 있어서
+                // 둘을 나란히 놓고 대조하는 게 목적이다.
+                android.util.Log.i(
+                    DIAG_TAG,
+                    buildString {
+                        append("q=").append(question)
+                        append(" | route=").append(result.route ?: "-")
+                        append(" | ms=").append(System.currentTimeMillis() - startedAt)
+                        result.search?.let { s ->
+                            append(" | filters=").append(s.fieldFilters)
+                            append(" | abstained=").append(s.abstained)
+                            append(" | cards=")
+                                .append(s.results.joinToString(",") { it.card.name })
+                        }
+                        if (result.filteredOut.isNotEmpty()) {
+                            append(" | dropped=").append(result.filteredOut.joinToString(","))
+                        }
+                        append(" | answer=").append(result.answer.replace('\n', ' ').take(120))
+                        result.error?.let { append(" | error=").append(it) }
+                    },
+                )
+                // 대화 내역은 세션이 관리한다(최근 8개 window + 구조화 메모리).
+                // 후속 발화 재사용 턴은 새로 검색하지 않았으니 도구 실행 기록도 없다.
+                val executedTools = if (result.conversationalFollowup) {
+                    emptyList()
+                } else {
+                    listOf("search_business_cards")
+                }
+                session.recordTurn(turnId, question, result.answer, executedTools)
+                // 질문이 실제로 이름을 지목했으면 그 이름을 지칭 대상으로 삼는다(우선).
+                // 그런 이름이 없으면(대명사/생략형 후속) 검색 1등 카드로 대체 — 새 개념
+                // 검색("판교 AI개발자 찾아줘")에서도 focus가 정상적으로 잡히게.
+                // "검색 1등이면 무조건 focus"였던 예전 방식은 유사 이름 오매칭 시
+                // focus가 엉뚱한 사람으로 튀는 문제가 있었다(실기기에서 발견).
+                val resultNames = result.search?.results?.map { it.card.name }?.distinct().orEmpty()
+                val namedInQuestion = resultNames.firstOrNull { name -> question.contains(name) }
+                (namedInQuestion ?: resultNames.firstOrNull())?.let {
+                    session.putToolContext(AgentSession.KEY_FOCUS_PERSON, it)
+                    // 담화 순서 지시("처음에 물어본 사람")를 풀려면 최근 창 밖의 인물도
+                    // 알아야 한다. focus 는 매 턴 그 턴의 주인공이므로 그대로 쌓으면
+                    // '대화에 등장한 순서'가 된다.
+                    session.putToolContext(
+                        AgentSession.KEY_SUBJECT_HISTORY,
+                        appendSubject(session.toolContextValue(AgentSession.KEY_SUBJECT_HISTORY), it),
+                    )
+                }
+                // 정정/확인 발화가 아니었을 때만 근거 카드를 갱신한다
+                // (정정 턴은 직전 근거를 그대로 유지해야 대화가 이어진다).
+                if (!result.conversationalFollowup) {
+                    val ids = result.search?.results?.map { it.card.id }.orEmpty()
+                    session.putToolContext(
+                        AgentSession.KEY_LAST_CARD_IDS,
+                        ids.joinToString(",").ifBlank { null },
+                    )
+                    session.putToolContext(AgentSession.KEY_LAST_QUERY, question)
+                }
+                // 이번 턴이 물어본 속성을 남겨 둔다 — 다음 턴이 "○○씨는?" 처럼
+                // 속성을 생략하면 여기서 이어받는다. 속성이 없는 질문이면
+                // 이전 값을 그대로 둬서 대화 흐름을 유지한다.
+                attributeOf(question)?.let {
+                    session.putToolContext(AgentSession.KEY_LAST_ATTRIBUTE, it)
+                }
+                // 이번 턴에 걸린 필드 조건어를 남긴다 — 다음 턴이 "그중에 …" 로
+                // 좁히면 여기서 이어받는다. 조건이 없었으면 이전 값을 유지한다.
+                result.search?.fieldFilters?.let { f ->
+                    val terms = (f.names + f.locations + f.titles).joinToString(" ")
+                    if (terms.isNotBlank()) {
+                        session.putToolContext(AgentSession.KEY_LAST_FILTER_TERMS, terms)
+                    }
+                }
+                messages.add(
+                    ChatMessage(
+                        isUser = false,
+                        text = result.answer,
+                        modelLabel = result.modelLabel,
+                        search = result.search,
+                        error = result.error,
+                        conversationalFollowup = result.conversationalFollowup,
+                        filteredOut = result.filteredOut,
+                    )
+                )
+            }
+    }
+
+    // 디버그 인텐트로 들어온 질문을 태운다(앱을 껐다 켜지 않으므로 세션이 유지된다).
+    LaunchedEffect(DebugQuestion.pending, asking) {
+        val q = DebugQuestion.pending
+        if (q != null && !asking) {
+            DebugQuestion.consume()
+            send(q)
+        }
+    }
+
     LaunchedEffect(messages.size, asking) {
         listState.animateScrollToItem((messages.size - 1).coerceAtLeast(0))
     }
@@ -282,7 +486,6 @@ private fun ChatScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .imePadding()
             .padding(horizontal = 16.dp),
     ) {
         Row(
@@ -342,73 +545,9 @@ private fun ChatScreen(
             Button(
                 enabled = !asking && input.isNotBlank(),
                 onClick = {
-                    val question = input.trim()
+                    val q = input.trim()
                     input = ""
-                    messages.add(ChatMessage(isUser = true, text = question))
-                    // 턴 시작을 구조화 메모리에 걸어둔다 — 이 턴이 끝까지 완료되지 못해도
-                    // (예외 등) 다음 턴에서 "아직 처리 못한 요청"으로 남는다.
-                    val turnId = java.util.UUID.randomUUID().toString()
-                    session.beginTurn(turnId, question)
-                    scope.launch {
-                        asking = true
-                        val result = withContext(Dispatchers.IO) {
-                            runChat(context, searchService, question, session)
-                        }
-                        asking = false
-                        // 대화 내역은 세션이 관리한다(최근 8개 window + 구조화 메모리).
-                        // 후속 발화 재사용 턴은 새로 검색하지 않았으니 도구 실행 기록도 없다.
-                        val executedTools = if (result.conversationalFollowup) {
-                            emptyList()
-                        } else {
-                            listOf("search_business_cards")
-                        }
-                        session.recordTurn(turnId, question, result.answer, executedTools)
-                        // 질문이 실제로 이름을 지목했으면 그 이름을 지칭 대상으로 삼는다(우선).
-                        // 그런 이름이 없으면(대명사/생략형 후속) 검색 1등 카드로 대체 — 새 개념
-                        // 검색("판교 AI개발자 찾아줘")에서도 focus가 정상적으로 잡히게.
-                        // "검색 1등이면 무조건 focus"였던 예전 방식은 유사 이름 오매칭 시
-                        // focus가 엉뚱한 사람으로 튀는 문제가 있었다(실기기에서 발견).
-                        val resultNames = result.search?.results?.map { it.card.name }?.distinct().orEmpty()
-                        val namedInQuestion = resultNames.firstOrNull { name -> question.contains(name) }
-                        (namedInQuestion ?: resultNames.firstOrNull())?.let {
-                            session.putToolContext(AgentSession.KEY_FOCUS_PERSON, it)
-                        }
-                        // 정정/확인 발화가 아니었을 때만 근거 카드를 갱신한다
-                        // (정정 턴은 직전 근거를 그대로 유지해야 대화가 이어진다).
-                        if (!result.conversationalFollowup) {
-                            val ids = result.search?.results?.map { it.card.id }.orEmpty()
-                            session.putToolContext(
-                                AgentSession.KEY_LAST_CARD_IDS,
-                                ids.joinToString(",").ifBlank { null },
-                            )
-                            session.putToolContext(AgentSession.KEY_LAST_QUERY, question)
-                        }
-                        // 이번 턴이 물어본 속성을 남겨 둔다 — 다음 턴이 "○○씨는?" 처럼
-                        // 속성을 생략하면 여기서 이어받는다. 속성이 없는 질문이면
-                        // 이전 값을 그대로 둬서 대화 흐름을 유지한다.
-                        attributeOf(question)?.let {
-                            session.putToolContext(AgentSession.KEY_LAST_ATTRIBUTE, it)
-                        }
-                        // 이번 턴에 걸린 필드 조건어를 남긴다 — 다음 턴이 "그중에 …" 로
-                        // 좁히면 여기서 이어받는다. 조건이 없었으면 이전 값을 유지한다.
-                        result.search?.fieldFilters?.let { f ->
-                            val terms = (f.names + f.locations + f.titles).joinToString(" ")
-                            if (terms.isNotBlank()) {
-                                session.putToolContext(AgentSession.KEY_LAST_FILTER_TERMS, terms)
-                            }
-                        }
-                        messages.add(
-                            ChatMessage(
-                                isUser = false,
-                                text = result.answer,
-                                modelLabel = result.modelLabel,
-                                search = result.search,
-                                error = result.error,
-                                conversationalFollowup = result.conversationalFollowup,
-                                filteredOut = result.filteredOut,
-                            )
-                        )
-                    }
+                    send(q)
                 },
             ) {
                 Text("전송")
@@ -961,6 +1100,37 @@ internal fun isSelfReferenceQuestion(question: String): Boolean {
     if (q.isEmpty()) return false
     return SELF_REFERENCE_PATTERNS.any { it in q }
 }
+/**
+ * "너 뭐 할 줄 알아?" 같은 기능 질문 — 자기참조와 같은 이유로 결정적으로 우회한다.
+ * 실측(전량 채점): 검색에 태우면 컨텍스트의 1등을 답으로 뱉었다("너 뭐 할 줄 알아?" -> "이현",
+ * 카드 1장). 무관 요청 카드 억제 실패 1건이 이 계열이었다.
+ *
+ * **자기참조보다 먼저 판정해야 한다** — "너는 뭐 할 줄 알아?" 는 SELF_REFERENCE_PATTERNS 의
+ * "너는 뭐" 에도 걸리는데, 그쪽이 먼저 잡으면 정체만 답하고 기능은 말하지 않는다.
+ */
+private val CAPABILITY_PATTERNS = listOf(
+    "뭐 할 줄", "뭘 할 줄", "무엇을 할 줄", "뭐할 줄", "뭘할 줄",
+    "뭐 할 수", "뭘 할 수", "무엇을 할 수", "할 수 있는 게", "할 수 있는게",
+    "어떤 기능", "기능이 뭐", "기능 뭐", "뭐 도와", "뭘 도와", "어떻게 쓰는",
+)
+
+internal fun isCapabilityQuestion(question: String): Boolean {
+    val q = question.trim().lowercase()
+    if (q.isEmpty()) return false
+    return CAPABILITY_PATTERNS.any { it in q }
+}
+
+/**
+ * 기능 안내 문구. 검색은 이 화면 자체의 기능이라 항상 맨 앞에 두고, 나머지는 등록된
+ * 도구에서 파생한다([ToolRegistry.capabilityLabels]). 도구가 늘면 여기를 고칠 필요가 없다.
+ */
+internal fun buildCapabilityAnswer(toolLabels: List<String>): String {
+    val lines = mutableListOf("이름·회사·지역·직함으로 명함을 찾습니다.")
+    lines += toolLabels
+    return "저는 명함 검색을 도와드리는 온디바이스 AI 어시스턴트입니다. 이런 걸 할 수 있어요:\n" +
+        lines.joinToString("\n") { "- $it" }
+}
+
 
 /**
  * "전체 몇 장/명" 같이 조건 없이 전체를 묻는 질문 — 결정적으로 우회한다. 검색은 항상
@@ -1035,20 +1205,31 @@ private fun runChat(
     question: String,
     session: AgentSession,
 ): ChatResult {
-    if (question.isBlank()) return ChatResult("질문을 입력하세요.", null)
+    if (question.isBlank()) return ChatResult("질문을 입력하세요.", null, route = "blank")
 
     // 검색/LLM 엔진 로드보다 먼저 결정적으로 우회할 질문인지 본다 — 불필요한 엔진 로드를
     // 막기도 하고, 프롬프트 규칙에만 맡기면 신뢰할 수 없는 질문 유형이기도 하다.
     // conversationalFollowup=true로 반환한다 — 검색을 안 했으니 도구 실행 기록을 남기지
     // 않고, focus/직전 카드 id도 건드리지 않는 게 이 플래그의 기존 의미와 정확히 같다.
+    // 기능 질문은 자기참조보다 먼저 본다("너는 뭐 할 줄 알아?" 가 양쪽에 걸린다).
+    if (isCapabilityQuestion(question)) {
+        val registry = ToolRegistry(CreateCalendarEventTool(context), OpenComposeTool(context))
+        return ChatResult(
+            buildCapabilityAnswer(registry.capabilityLabels()),
+            null,
+            route = "capability",
+            conversationalFollowup = true,
+        )
+    }
     if (isSelfReferenceQuestion(question)) {
-        return ChatResult(SELF_REFERENCE_ANSWER, null, conversationalFollowup = true)
+        return ChatResult(SELF_REFERENCE_ANSWER, null, route = "self_reference", conversationalFollowup = true)
     }
     if (isUnfilteredListAllQuestion(question)) {
         val total = searchService.totalCardCount()
         return ChatResult(
             "현재 총 ${total}명의 명함이 등록되어 있습니다. 이름·회사·지역 등 구체적인 조건으로 검색해 보세요.",
             null,
+            route = "total_count",
             conversationalFollowup = true,
         )
     }
@@ -1073,6 +1254,7 @@ private fun runChat(
             return ChatResult(
                 "총 ${matched.size}명",
                 response,
+                route = "filtered_count",
                 conversationalFollowup = true,
             )
         }
@@ -1087,7 +1269,21 @@ private fun runChat(
     // 카드는 맞는데 답변만 엉뚱해진다.
     @Suppress("NAME_SHADOWING")
     val question = applyNarrowing(
-        carryOverAttribute(question, session.toolContextValue(AgentSession.KEY_LAST_ATTRIBUTE)),
+        carryOverAttribute(
+            // 담화 순서 지시는 **가장 먼저** 푼다. 뒤로 밀면 "첫 번째 사람"이 아래
+            // ordinalIdx 블록으로 새서 직전 카드 목록의 1번을 고른다.
+            // 대상 정정은 대명사 치환(resolveSearchQuery)보다 **먼저** 푼다 —
+            // 뒤에 두면 '그분'이 이미 옛 focus 로 바뀐 뒤라 정정이 무시된다.
+            resolveCorrection(
+                resolveDiscourseReference(
+                    question,
+                    session.toolContextValue(AgentSession.KEY_SUBJECT_HISTORY),
+                    prevCardIds.size,
+                ),
+                runCatching { searchService.knownNamesIn(question) }.getOrNull().orEmpty(),
+            ),
+            session.toolContextValue(AgentSession.KEY_LAST_ATTRIBUTE),
+        ),
         session.toolContextValue(AgentSession.KEY_LAST_FILTER_TERMS),
     )
 
@@ -1132,11 +1328,12 @@ private fun runChat(
         selectedIds.isNotEmpty()
     ) {
         val search = runCatching { searchService.searchByIds(selectedIds) }.getOrNull()
-        val answer = runCatching {
-            engine.generate(
-                buildAnswerPrompt(session, question, search?.ragContext(5).orEmpty(), followup = true)
-            )
-        }.getOrNull().orEmpty()
+        val answer = emptyFieldAnswer(question, search?.results?.map { it.card }.orEmpty())
+            ?: runCatching {
+                engine.generate(
+                    buildAnswerPrompt(session, question, search?.ragContext(5).orEmpty(), followup = true)
+                )
+            }.getOrNull().orEmpty()
         val finalAnswer = answer.ifBlank { "직전 결과 기준으로 답변을 만들지 못했어요." }
         // 후속 발화에서도 LLM이 "못 찾았다"고 답할 수 있다 — 메인 경로와 동일하게 그
         // 경우 카드를 비운다(일관성 문제였다. 메인 경로는 이미 narrowByAnswer로 처리함).
@@ -1150,6 +1347,7 @@ private fun runChat(
         return ChatResult(
             answer = finalAnswer,
             search = narrowedSearch,
+            route = "followup",
             modelLabel = modelLabel,
             conversationalFollowup = true,
             filteredOut = dropped,
@@ -1173,6 +1371,7 @@ private fun runChat(
         return ChatResult(
             answer = contextual,
             search = prior,
+            route = "context_answer",
             modelLabel = modelLabel,
             conversationalFollowup = true,
         )
@@ -1193,7 +1392,12 @@ private fun runChat(
     // 둘 다 데이터에 있는데 교집합만 비는 경우인데, 빈 컨텍스트를 넣었더니 2B 모델이
     // 컨텍스트 문자열("검색 후보 없음")을 그대로 답변으로 뱉었다(pass^3 3회 모두 재현).
     if (search.abstained || search.results.isEmpty()) {
-        return ChatResult(answer = NO_MATCH_PHRASE, search = search, modelLabel = modelLabel)
+        return ChatResult(
+            answer = NO_MATCH_PHRASE,
+            search = search,
+            route = if (search.abstained) "abstain" else "empty_result",
+            modelLabel = modelLabel,
+        )
     }
 
     // 조건이 명확해서 전체를 셀 수 있으면 그 진짜 수를 컨텍스트에 넣는다. 못 세는
@@ -1202,8 +1406,9 @@ private fun runChat(
     val totalMatches = runCatching { searchService.countByCondition(question)?.size }.getOrNull()
 
     return try {
-        val llmAnswer = engine.generate(
-            buildAnswerPrompt(session, question, search.ragContext(5, totalMatches)))
+        val llmAnswer = emptyFieldAnswer(question, search.results.map { it.card })
+            ?: engine.generate(
+                buildAnswerPrompt(session, question, search.ragContext(5, totalMatches)))
         if (llmAnswer == LiteRtLmChatEngine.EMPTY_RESPONSE) {
             ChatResult(
                 answer = "LLM이 유효한 답변을 만들지 못했어요. 검색 결과를 참고해 주세요." +
@@ -1220,6 +1425,7 @@ private fun runChat(
             ChatResult(
                 answer = llmAnswer,
                 search = narrowed,
+                route = "search",
                 modelLabel = modelLabel,
                 filteredOut = dropped,
             )
@@ -1356,6 +1562,110 @@ private val ATTRIBUTE_NOUNS = listOf(
  *
  * 별도 규칙을 더한 게 아니라 이미 있던 생략 처리의 나머지 절반이다.
  */
+
+/**
+ * 담화 순서 지시("처음에 물어본 사람 전화번호는?")를 그 사람 이름으로 바꿔 다시 쓴다.
+ *
+ * [ConversationalFollowup.ordinalIndex] 와 **다른 것**이다. 저쪽은 직전 결과 목록의
+ * N번째 카드를 고르고, 이쪽은 **대화에서 N번째로 화제가 된 사람**을 가리킨다. 지시 대상이
+ * 카드 목록이 아니라 지난 발화라 focus 치환으로도 닿지 않는다(그 인물은 이미 최근 창 밖이다).
+ *
+ * 실측(HJP-limited/ymj Final50 v3): 이 처리가 없으면 "처음에 물어본 사람 전화번호는?" 이
+ * 새 검색으로 빠지고 "처음/물어본/사람"이 검색어가 돼 대화에 없던 사람을 데려왔다
+ * (long_range_reactivation 0/10, discourse_coreference 0/10).
+ *
+ * 이름을 앞에 붙여 **질의를 다시 쓰는** 방식이라(resolveSearchQuery·applyNarrowing 과 동일)
+ * 그 뒤 검색·필터·focus 는 평소 경로를 그대로 탄다.
+ */
+private val DISCOURSE_VERBS = listOf(
+    "물어본", "물어봤", "질문한", "질문했", "언급한", "언급했",
+    "확인한", "확인했", "말한", "말했", "등장한", "나온",
+)
+private val DISCOURSE_FIRST = listOf("맨 처음", "처음에", "처음", "가장 먼저", "먼저")
+private val DISCOURSE_HINTS = DISCOURSE_VERBS + DISCOURSE_FIRST + listOf("대화")
+
+/** 이름을 앞에 붙인 뒤 남으면 검색어를 오염시키는 말들. 긴 것부터 지운다. */
+private val DISCOURSE_STRIP = (DISCOURSE_HINTS + listOf(
+    // 시간 부사를 남기면 contextAnswer 가 "아까"를 보고 되짚기로 오인해 직전 답변을
+    // 재생한다(실측: "아까 처음에 물어본 분 전화번호는?" -> 엉뚱한 번호).
+    "아까", "방금", "앞서",
+    "그분", "그 분", "사람", "분", "대화에서", "두 사람", "중", "맨", "가장",
+    "첫 번째로", "첫 번째", "첫번째", "번째로", "번째", "그", "했던", "던",
+)).sortedByDescending { it.length }
+
+/** 쉼표로 이어 둔 화제 인물 목록에 새 인물을 더한다(이미 있으면 순서를 유지한다). */
+internal fun appendSubject(previous: String?, name: String): String {
+    val list = previous?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+    return if (name in list) list.joinToString(",") else (list + name).joinToString(",")
+}
+
+/**
+ * @param subjectHistory 대화에 등장한 인물(처음 나온 순서). [AgentSession.KEY_SUBJECT_HISTORY].
+ * @param prevCardCount  직전 턴이 남긴 카드 수. 담화 단서 없는 순서 지시를 가를 때 쓴다.
+ */
+internal fun resolveDiscourseReference(
+    question: String,
+    subjectHistory: String?,
+    prevCardCount: Int,
+): String {
+    val subjects = subjectHistory?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+    if (subjects.isEmpty()) return question
+    // 질문이 이미 사람을 지목하고 있으면 지시가 아니다.
+    if (subjects.any { it in question }) return question
+
+    val idx = when {
+        DISCOURSE_HINTS.any { it in question } ->
+            if (DISCOURSE_FIRST.any { it in question }) 0
+            else ConversationalFollowup.ordinalIndex(question)
+        // "첫 번째 사람" 처럼 담화 단서가 없는 순서 지시. 직전 결과가 0~1장이면 거기서
+        // 고를 게 없으므로 대화 순서를 가리키는 말로 읽는다(narrowByAnswer 4단계와 같은 원리).
+        prevCardCount < 2 -> ConversationalFollowup.ordinalIndex(question)
+        else -> null
+    } ?: return question
+
+    val name = (if (idx < 0) subjects.lastOrNull() else subjects.getOrNull(idx)) ?: return question
+    var rest = question
+    for (w in DISCOURSE_STRIP) rest = rest.replace(w, " ")
+    rest = rest.replace(Regex("\\s+"), " ").trim()
+    return "$name $rest".trim()
+}
+
+
+/** 대상 정정("A가 아니라 B야") 표지. */
+private val CORRECTION_MARKERS = listOf("아니라", "말고", "정정", "아니고")
+
+/**
+ * "손서윤씨가 아니라 남다은씨야. 그분 회사는?" 처럼 **대상을 바꾸는** 발화를
+ * 정정된 사람에 대한 질의로 다시 쓴다.
+ *
+ * 실측(Final50 v3): 이게 없으면 두 이름이 **둘 다** 이름 조건으로 잡히고, 대명사('그분')는
+ * [resolveSearchQuery] 가 **옛 focus** 로 치환해 버린다("… 남다은씨야. 손서윤 회사는 어디야?").
+ * 그러면 focus 가 옛 대상에 머물러 **그 뒤 모든 턴이 틀린 사람**을 답한다(4턴 시나리오가 통째로
+ * 무너진다). 그래서 대명사 치환보다 **먼저** 돌아야 한다. 실측 4/10 -> 7/10.
+ *
+ * 정정 표지가 있고 아는 이름이 **둘 이상**일 때만 건다 — 마지막에 말한 이름이 정정된 대상이다.
+ *
+ * @param knownNames 이 발화에서 뽑힌, 데이터에 실재하는 이름들.
+ */
+internal fun resolveCorrection(question: String, knownNames: List<String>): String {
+    if (CORRECTION_MARKERS.none { it in question }) return question
+    if (knownNames.size < 2) return question
+    // 추출 순서가 아니라 **발화에 나타난 위치** 순으로 본다.
+    val ordered = knownNames.sortedBy { question.indexOf(it) }
+    val target = ordered.last()
+    // 정정 뒤의 실제 요청만 남긴다 — 마지막 문장이 그 요청이다.
+    var tail = question
+    for (sep in listOf(".", "!", "?")) {
+        val parts = tail.split(sep).filter { it.isNotBlank() }
+        if (parts.size > 1) tail = parts.last()
+    }
+    // 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
+    for (n in ordered.dropLast(1)) tail = tail.replace("${n}씨", " ").replace(n, " ")
+    for (p in FOLLOWUP_PRONOUNS) tail = tail.replace(p, " ")
+    tail = tail.replace(Regex("\\s+"), " ").trim()
+    return "$target $tail".trim()
+}
+
 internal fun carryOverAttribute(question: String, lastAttribute: String?): String {
     if (lastAttribute.isNullOrBlank()) return question
     val q = question.trim()
@@ -1370,6 +1680,51 @@ internal fun carryOverAttribute(question: String, lastAttribute: String?): Strin
 /** 질문에서 어떤 속성을 물었는지 뽑아 둔다(다음 턴이 속성을 생략했을 때 이어받으려고). */
 internal fun attributeOf(question: String): String? =
     ATTRIBUTE_NOUNS.firstOrNull { it in question }
+/**
+ * 속성 명사 -> 카드 필드. 물어본 칸이 실제로 비어 있는지 보려고 둔다.
+ * ('이름'은 비는 일이 없어 뺀다.)
+ */
+private val ATTRIBUTE_FIELD = mapOf(
+    "전화번호" to "phone", "전화" to "phone", "번호" to "phone", "연락처" to "phone",
+    "핸드폰" to "phone", "휴대폰" to "phone",
+    "메일" to "email", "이메일" to "email",
+    "직급" to "title", "직함" to "title", "직책" to "title",
+    "회사" to "company", "소속" to "company",
+    "주소" to "address", "위치" to "address", "지역" to "location",
+    "부서" to "department",
+)
+
+/**
+ * 대상이 하나로 정해졌는데 물어본 칸이 비어 있으면 결정적으로 '없다'고 답한다.
+ *
+ * 실측(Final50 v3 unanswerable): 빈 칸을 그냥 물으면 2B 모델이 **옆 칸 값으로 대체**했다 —
+ * 회사를 물었는데 "국내영업팀입니다"(부서), "제주특별자치도 제주시"(주소), 직급을 물었는데
+ * "생산관리팀입니다"(부서). 컨텍스트에 그 칸만 없을 뿐 나머지 값이 다 들어 있으니 모델이
+ * 가장 그럴듯한 걸 골라 채운다. **값이 없다는 건 코드가 이미 아는 사실**이라 모델에
+ * 맡길 이유가 없다(프롬프트 규칙 추가는 4전 4패다).
+ *
+ * 후보가 정확히 1장일 때만 건다 — 여러 명이면 '그중 누구의 칸'인지 정해지지 않는다
+ * (narrowByAnswer 4단계와 같은 원리).
+ */
+internal fun emptyFieldAnswer(question: String, cards: List<BusinessCardEntity>): String? {
+    if (cards.size != 1) return null
+    val attr = attributeOf(question) ?: return null
+    val field = ATTRIBUTE_FIELD[attr] ?: return null
+    val card = cards[0]
+    val value = when (field) {
+        "phone" -> card.phone
+        "email" -> card.email
+        "title" -> card.title
+        "company" -> card.company
+        "address" -> card.address
+        "location" -> card.location
+        "department" -> card.department
+        else -> null
+    }
+    if (!value.isNullOrBlank()) return null
+    return "$attr 정보가 없습니다."
+}
+
 
 /** "그중에", "거기서" — 앞 턴 결과 안에서 더 좁히자는 표현. */
 private val NARROWING_MARKERS = listOf("그중", "그 중", "거기서", "그 안에서", "그것들 중")

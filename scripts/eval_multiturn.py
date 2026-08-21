@@ -1,4 +1,4 @@
-"""멀티턴 평가 — 라우팅 / JGA(슬롯) / 턴별 R@5 / 체크리스트 통과율 / pass^k.
+"""멀티턴 평가 — 라우팅 / JGA(슬롯) / 턴별 Hit@5·R@5·MRR / 체크리스트 통과율 / pass^k.
 
 왜 이 지표들인가
 ----------------
@@ -8,7 +8,7 @@
 반대로 실제로 겪은 실패는 전부 '어느 경로로 갔나'였다
 (판교 디자이너가 완화 경로로 새서 오답, 개념형이 카운트 형식으로 새서 가짜 총계).
 
-그래서 **주 지표는 라우팅 + JGA + 턴별 R@5**(1~3층)이고, 답변 텍스트 채점은
+그래서 **주 지표는 라우팅 + JGA + 턴별 Hit@5**(1~3층)이고, 답변 텍스트 채점은
 **LLM이 실제로 생성한 턴에만** 매기는 보조 지표(4~5층)다. 전체를 뭉쳐 하나의
 통과율로 내면 고정 문자열 턴이 숫자를 채워서 어려운 턴의 성능을 가린다.
 
@@ -32,7 +32,13 @@
 - **JGA (Joint Goal Accuracy)** — 그 턴의 **모든** 슬롯이 정답과 정확히 일치한 턴의 비율.
   슬롯은 focus 인물 + 필드 조건(이름/직함/지역). 대화상태추적의 표준 지표를 우리 슬롯에 적용.
 - **슬롯 F1** — JGA는 하나만 틀려도 0이라 부분 점수를 같이 본다.
-- **턴별 R@5** — 정답 카드가 상위 5개 후보에 있는가.
+- **턴별 Hit@5** — 정답 카드가 상위 5개 안에 **하나라도** 있는가. 정답이 1장인 턴
+  (전체의 76.4%)에서는 recall 과 같은 값이다.
+- **턴별 R@5** — 상한을 1.0 으로 맞춘 형태(분모 min(정답수,5)). `eval_search.py` 와 같은 공식.
+  날것의 Recall@5(분모=정답수)는 안 쓴다 — 이 시나리오 집합에서 **완벽한 검색기의 상한이
+  0.924** 이고, 유형별로는 '조사 변형 카운트' 0.096 · '없는 조합->복구' 0.206 처럼 크게
+  눌려서 잘해도 낮게 나온다(측정값). 상한이 왜곡된 지표로 유형을 비교하면 안 된다.
+- **턴별 MRR** — 첫 정답의 역순위. 정답 수에 좌우되지 않는다.
 - **체크리스트 통과율** — 답변에 필수 문자열이 있고 금지 문자열이 없는가(LLM 턴만).
 - **pass^k** — 같은 시나리오를 k번 돌려 k번 다 통과한 비율.
 
@@ -42,6 +48,10 @@
 """
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _P
+_sys.path.insert(0, str(_P(__file__).resolve().parent))
+import card_fingerprint as _cfp
 import argparse
 import json
 import random
@@ -254,7 +264,12 @@ def build_scenarios(cards, rng):
         loc_cards = [c for c in cards if loc in (c.get("address") or "")]
         if not loc_cards:
             continue
-        present = {(c.get("title") or "").strip() for c in loc_cards}
+        # **토큰 단위로** 비교해야 한다. 완전 직함끼리만 비교했더니
+        # "대구에 있는 디자이너"를 '없는 조합'으로 분류했는데, 실제로는 대구에
+        # '시니어 디자이너'가 있어서 시스템이 맞고 시나리오가 틀렸다(held-out seed 7 에서
+        # 발견 — seed 42 에서는 이 조합이 안 뽑혀 평가 결함이 드러나지 않았다).
+        # 검색이 직함을 토큰으로 매칭하므로 정답 판정도 같은 기준이어야 한다.
+        present = {t for c in loc_cards for t in norm_tokens(c.get("title"))}
         for t in sorted(all_titles - present):
             if len(t) >= 2 and title_counts.get(t, 0) >= 10:
                 empty_pairs.append((loc, t, [c["id"] for c in loc_cards]))
@@ -307,9 +322,32 @@ def build_scenarios(cards, rng):
         ])
 
     # (13) 단발로만 확인되는 것 — 대화에 넣으면 의미가 흐려지므로 1턴으로 둔다
-    add("전체 카운트", [turn("전체 몇 장이야?", "total_count", must=[[f"{len(cards)}명"]])])
+    #
+    # 전체 개수는 **표현 변형이 핵심**이다. 실기기에서 "내가 가진 명함 개수 몇개야?",
+    # "명함 몇 개 있어?" 가 전부 검색으로 빠져 "총 5명"이라 답했다(실제 1000).
+    # "전체/총" 신호가 있어야만 통과시키던 게 원인이라, 자연스러운 표현들을 다 넣어 둔다.
+    for phrasing in ("전체 몇 장이야?", "내가 가진 명함 개수 몇개야?", "명함 몇 개 있어?",
+                     "내 명함 몇 장이야?", "저장된 명함 개수는?", "명함 몇 장 가지고 있어?"):
+        add("전체 카운트", [turn(phrasing, "total_count", must=[[f"{len(cards)}명"]])])
     add("자기참조", [turn("너는 누구야?", "self_reference", must=[["어시스턴트"]])])
     add("기권(전화)", [turn("010-0000-0000", "abstain", must=[REJECTIONS])])
+
+    # (13-b) 조사 변형 카운트 — 계사 관형형("~인 사람")을 쓰는 자연스러운 표현.
+    #        실기기에서 "주소가 대전인 사람 몇 명이야?" 가 총 5명이라 답했다(실제 51).
+    #        '대전인' 의 '인' 을 못 떼서 조건이 안 잡히고 검색으로 폴백한 것이다.
+    for loc in ("대전", "부산"):
+        ids = [c["id"] for c in cards if loc in (c.get("address") or "")]
+        if ids:
+            add("조사 변형 카운트", [
+                turn(f"주소가 {loc}인 사람 몇 명이야?", "filtered_count", None, ids,
+                     must=[[f"총 {len(ids)}명"]]),
+            ])
+    for title in korean_titles[:2]:
+        ids = [c["id"] for c in cards if title in norm_tokens(c.get("title"))]
+        add("조사 변형 카운트", [
+            turn(f"직급이 {title}인 사람 몇 명이야?", "filtered_count", None, ids,
+                 must=[[f"총 {len(ids)}명"]]),
+        ])
 
     # (14) 본인 사실 vs 명함 인물 구분 — 예전에는 "그 사람 회사 어디야" 가
     #      contextAnswer 로 새서 **본인** 회사를 답했다(알려진 간극이었다).
@@ -390,15 +428,30 @@ def build_scenarios(cards, rng):
 
 # --- 실행 -------------------------------------------------------------------
 
-def ask(question, history, focus, prev_ids, memory, dry_run):
+def ask(question, history, focus, prev_ids, memory, dry_run, attempts=3):
+    """
+    한 턴을 서버에 묻는다. **타임아웃이면 다시 시도한다.**
+
+    실측: 386턴 생성 모드에서 220건까지 중앙 8초로 정상이다가 한 건이 697초 걸려
+    클라이언트 타임아웃에 걸렸고, 그 예외가 그대로 올라가면서 **1시간짜리 실행이
+    통째로** 버려졌다(원인은 같은 디스크의 OneDrive 동기화로 추정 — 앞서 44분 지연도
+    같은 패턴이었다). 단발 지연 때문에 전체를 잃지 않도록 재시도한다.
+    """
     payload = json.dumps({
         "question": question, "history": history, "focus": focus,
         "prev_card_ids": prev_ids, "conversation_memory": memory,
         "dry_run": dry_run,
     }, ensure_ascii=False).encode()
-    req = urllib.request.Request(ENDPOINT, data=payload,
-                                 headers={"Content-Type": "application/json"})
-    return json.loads(urllib.request.urlopen(req, timeout=600).read().decode())
+    last = None
+    for i in range(attempts):
+        req = urllib.request.Request(ENDPOINT, data=payload,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(req, timeout=600).read().decode())
+        except Exception as e:  # noqa: BLE001
+            last = e
+            print(f"  [재시도 {i + 1}/{attempts}] {type(e).__name__}: {question[:30]}", flush=True)
+    raise last
 
 
 def slot_sets(expected, actual_filters, actual_focus):
@@ -447,7 +500,14 @@ def run_pass(scenarios, dry_run, stats, failures, gap_failures):
         route_all_ok = True
         checks_all_ok = True
         for depth, t in enumerate(sc["turns"], start=1):
-            res = ask(t["q"], history, focus, prev_ids, memory, dry_run)
+            try:
+                res = ask(t["q"], history, focus, prev_ids, memory, dry_run)
+            except Exception as e:  # noqa: BLE001
+                # 재시도까지 실패하면 그 시나리오만 중단하고 계속 간다 —
+                # 전체 실행을 잃는 것보다 낫다. 집계에는 실패로 남는다.
+                target_failures.append((kind, depth, t["q"], f"요청 실패: {type(e).__name__}"))
+                stats["request_error"] = stats.get("request_error", 0) + 1
+                break
             answer = res.get("answer") or ""
             route = res.get("route")
 
@@ -476,13 +536,36 @@ def run_pass(scenarios, dry_run, stats, failures, gap_failures):
                 st["fn"] += len(exp - act)
 
             if t["gold"]:
-                st["r5_n"] += 1
-                st["kind"][kind]["r5_n"] += 1
-                if any(g in (res.get("card_ids") or [])[:5] for g in t["gold"]):
-                    st["r5_ok"] += 1
-                    st["kind"][kind]["r5_ok"] += 1
+                gold = set(t["gold"])
+                top5 = (res.get("card_ids") or [])[:5]
+                found = gold & set(top5)
+
+                # Hit@5 — 정답이 **하나라도** top-5 에 있으면 성공.
+                # 예전 이름이 'R@5' 였는데 계산은 이것이었다(HJP-limited/ymj 에서 지적).
+                # 정답이 1장인 턴(76.4%)은 recall 과 같은 값이지만, 정답이 여럿인 턴에서는
+                # 훨씬 후하다 — 정답 104장짜리 턴은 사실상 자동 통과다.
+                st["hit5_n"] += 1
+                st["kind"][kind]["hit5_n"] += 1
+                if found:
+                    st["hit5_ok"] += 1
+                    st["kind"][kind]["hit5_ok"] += 1
                 else:
                     target_failures.append((kind, depth, t["q"], "정답 카드가 top-5 에 없음"))
+
+                # R@5 — 분모를 min(정답수, 5) 로 잘라 **상한을 1.0 으로** 맞춘 형태.
+                # eval_search.py 의 R@5 와 같은 공식이라 두 스크립트를 나란히 볼 수 있다.
+                # 날것의 Recall@5(분모=정답수)는 쓰지 않는다: 이 시나리오 집합에서 완벽한
+                # 검색기의 상한이 0.924 이고, '조사 변형 카운트' 0.096 · '없는 조합->복구'
+                # 0.206 처럼 유형별로 크게 눌려서 잘해도 낮게 나온다(측정값).
+                st["r5_sum"] += len(found) / min(len(gold), 5)
+                st["r5_n"] += 1
+                st["kind"][kind]["r5_sum"] += len(found) / min(len(gold), 5)
+                st["kind"][kind]["r5_n"] += 1
+
+                # MRR — 첫 정답의 역순위. 정답 수에 좌우되지 않아 상한 문제가 없다.
+                rr = next((1.0 / (i + 1) for i, cid in enumerate(top5) if cid in gold), 0.0)
+                st["mrr_sum"] += rr
+                st["kind"][kind]["mrr_sum"] += rr
 
             # 체크리스트는 생성 모드에서만, 그리고 **LLM 이 실제로 답을 만든 턴에만** 매긴다.
             if not dry_run and t["must"]:
@@ -584,11 +667,13 @@ def stratified_sample(scenarios, n, rng):
 def new_stats():
     return {
         "route_ok": 0, "route_n": 0, "jga_ok": 0, "jga_n": 0,
-        "tp": 0, "fp": 0, "fn": 0, "r5_ok": 0, "r5_n": 0,
+        "tp": 0, "fp": 0, "fn": 0,
+        "hit5_ok": 0, "hit5_n": 0, "r5_sum": 0.0, "r5_n": 0, "mrr_sum": 0.0,
         "chk_llm_ok": 0, "chk_llm_n": 0, "nocard_ok": 0, "nocard_n": 0, "chk_det_ok": 0, "chk_det_n": 0,
         "gen_ms": [],
         "kind": defaultdict(lambda: {"route_ok": 0, "route_n": 0, "jga_ok": 0, "jga_n": 0,
-                                     "r5_ok": 0, "r5_n": 0, "chk_ok": 0, "chk_n": 0}),
+                                     "hit5_ok": 0, "hit5_n": 0, "r5_sum": 0.0, "r5_n": 0,
+                                     "mrr_sum": 0.0, "chk_ok": 0, "chk_n": 0}),
         "depth": defaultdict(lambda: {"ok": 0, "n": 0}),
         "confusion": Counter(),
     }
@@ -602,6 +687,10 @@ def main():
                     help="시나리오를 N개만 (유형별 층화 추출). 21종을 다 담으려면 25 이상")
     ap.add_argument("--repeat", type=int, default=1, help="k회 반복해 pass^k 를 낸다")
     ap.add_argument("--verbose", action="store_true", help="실패 건을 전부 출력")
+    ap.add_argument("--seed", type=int, default=SEED,
+                    help="시나리오 생성 seed. 기본 42 는 개발하면서 계속 보던 셋이라, "
+                         "다른 값을 주면 **한 번도 안 본 시나리오**로 검증할 수 있다"
+                         "(held-out). 코드를 시험에 맞춰 짠 게 아닌지 확인하는 용도")
     ap.add_argument("--latency", action="store_true",
                     help="생성 시간을 함께 출력한다. **실기기 지연이 아니라** LLM 서버를 "
                          "띄운 데스크톱 성능이므로 성능 지표로 인용하지 말 것. "
@@ -609,9 +698,15 @@ def main():
     args = ap.parse_args()
 
     cards = json.loads(CARDS_PATH.read_text(encoding="utf-8"))
-    scenarios = build_scenarios(cards, random.Random(SEED))
+    # 벡터가 지금 카드와 맞는지 먼저 본다. 안 맞으면 시맨틱이 옛날 내용으로
+    # 돌아 지표가 조용히 틀어진다(id 는 그대로라 다른 검사로는 안 잡힌다).
+    _st, _msg = _cfp.check_stamp(CARDS_PATH.parent / _cfp.STAMP_NAME, cards)
+    if _st != "ok":
+        print(_cfp.banner(_st, _msg), flush=True)
+
+    scenarios = build_scenarios(cards, random.Random(args.seed))
     if args.sample and args.sample < len(scenarios):
-        scenarios = stratified_sample(scenarios, args.sample, random.Random(SEED))
+        scenarios = stratified_sample(scenarios, args.sample, random.Random(args.seed))
 
     dry_run = not args.generate
     try:
@@ -636,6 +731,10 @@ def main():
         always_pass = s if always_pass is None else (always_pass & s)
     elapsed = time.time() - t0
 
+    if stats.get("request_error"):
+        print(f"\n[주의] 요청 실패 {stats['request_error']}건 — 서버 지연/중단으로 그만큼"
+              " 시나리오가 덜 채점됐다. 지표를 그대로 인용하지 말 것.")
+
     def pct(a, b):
         return f"{a / b:.3f}" if b else "  -  "
 
@@ -646,7 +745,10 @@ def main():
     rec = stats["tp"] / (stats["tp"] + stats["fn"]) if stats["tp"] + stats["fn"] else 0.0
     f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
     print(f"  슬롯 P/R/F1     {prec:.3f} / {rec:.3f} / {f1:.3f}")
-    print(f"  턴별 R@5       {pct(stats['r5_ok'], stats['r5_n'])}  ({stats['r5_ok']}/{stats['r5_n']})")
+    print(f"  턴별 Hit@5     {pct(stats['hit5_ok'], stats['hit5_n'])}  ({stats['hit5_ok']}/{stats['hit5_n']})")
+    n5 = stats["r5_n"] or 1
+    print(f"  턴별 R@5       {stats['r5_sum'] / n5:.3f}  (분모 min(정답수,5) — eval_search.py 와 같은 공식)")
+    print(f"  턴별 MRR       {stats['mrr_sum'] / n5:.3f}")
 
     if args.generate:
         print("\n[4~5층 — 생성 필요]")
@@ -684,14 +786,14 @@ def main():
                   f"{q(0.5):.1f} / {sum(g)/len(g)/1000:.1f} / {q(0.95):.1f} / {g[-1]/1000:.1f}초")
 
     print("\n[유형별]  (n = 채점된 턴 수)")
-    header = f"  {'유형':<18} {'라우팅':>13} {'JGA':>13} {'R@5':>13}"
+    header = f"  {'유형':<18} {'라우팅':>13} {'JGA':>13} {'Hit@5':>13}"
     if args.generate:
         header += f" {'체크리스트':>13}"
     print(header)
     for kind, s in sorted(stats["kind"].items()):
         line = (f"  {kind:<18} {pct(s['route_ok'], s['route_n']):>7} n={s['route_n']:<4}"
                 f" {pct(s['jga_ok'], s['jga_n']):>7} n={s['jga_n']:<4}"
-                f" {pct(s['r5_ok'], s['r5_n']):>7} n={s['r5_n']:<4}")
+                f" {pct(s['hit5_ok'], s['hit5_n']):>7} n={s['hit5_n']:<4}")
         if args.generate:
             line += f" {pct(s['chk_ok'], s['chk_n']):>7} n={s['chk_n']:<4}"
         print(line)

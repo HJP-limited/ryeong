@@ -30,6 +30,21 @@ class ToolRegistry(vararg tools: AgentTool) {
     fun declarationsJson(indent: Int = 2): String =
         JSONArray(byName.values.map { it.declaration }).toString(indent)
 
+    /**
+     * "뭐 할 줄 알아?" 에 답할 때 쓰는 기능 목록. 각 도구의 declaration description
+     * 첫 문장만 뽑는다 — 뒷문장은 LLM 을 위한 사용 지침(형식·호출 순서)이라 사용자에게
+     * 보여줄 내용이 아니다.
+     *
+     * 문구를 따로 적어 두지 않고 여기서 파생시키는 이유: 도구가 늘어날 때마다 소개 문구를
+     * 같이 고쳐야 하면 반드시 어긋난다. 등록만 하면 답변이 따라오게 둔다.
+     */
+    fun capabilityLabels(): List<String> = byName.values.mapNotNull { tool ->
+        val desc = tool.declaration.optString("description").trim()
+        if (desc.isEmpty()) return@mapNotNull null
+        val end = desc.indexOf(". ").let { if (it < 0) desc.length else it + 1 }
+        desc.substring(0, end).trim()
+    }
+
     /** LLM이 출력한 tool call을 실행하고 결과 JSON 문자열을 반환 */
     suspend fun dispatch(name: String, args: JSONObject): String {
         val tool = byName[name]

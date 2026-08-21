@@ -176,6 +176,15 @@ class CardSearchService(
             cachedGazetteer ?: CardGazetteer(dao.allCards()).also { cachedGazetteer = it }
         }
 
+    /**
+     * 질의에서 **데이터에 실재하는** 사람 이름만 뽑는다.
+     *
+     * 대상 정정("A가 아니라 B야")을 풀 때 쓴다 — 검색과 같은 어휘로 판정해야 두 곳이
+     * 갈라지지 않는다. 가제티어는 카드에서 만들어지므로 새 명함이 들어오면 자동으로 따라온다.
+     */
+    fun knownNamesIn(query: String): List<String> =
+        extractFieldFilters(KeywordSearchRanker.analyze(query), gazetteer()).names
+
     private fun invalidateGazetteer() {
         cachedGazetteer = null
     }

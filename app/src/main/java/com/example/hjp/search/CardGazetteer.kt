@@ -430,8 +430,18 @@ fun shouldAbstain(
 ): Boolean {
     if (CardGazetteer.isIdentifierQuery(analyzed.raw)) return keywordHitCount == 0
     if (gazetteer == null) return false
+    // 질의가 **데이터에 실재하는 사람**을 이미 지목했는지 먼저 본다.
+    // 지역 오탐을 막는 근거다: 분석기가 조사 붙은 형태를 그대로 남기는 탓에 "이메일도"·
+    // "회사도" 가 '도(道)로 끝나는 3자 이상' 조건에 걸려 없는 지역으로 판정됐다
+    // (실측: "두미영 회사와 이메일도 알려줘" -> 기권. "이메일"만 쓰면 정상).
+    // 토큰 모양만으로는 "울릉도"와 구분이 안 된다 — 둘 다 같은 규칙에 걸린다. 그래서
+    // '이미 실재하는 사람을 지목했으면 곁가지 토큰의 지명 오탐으로 전체를 기권시키지
+    // 않는다'로 가른다. 없는 지역만 물은 질의("울릉도 근무자")는 지목된 사람이 없어 그대로 기권.
+    val namedRealPerson = analyzed.keywordTokens.any {
+        gazetteer.looksLikePersonName(it) && gazetteer.nameExists(gazetteer.personNameStem(it))
+    }
     for (token in analyzed.keywordTokens) {
-        if (gazetteer.looksLikeRegion(token) && !gazetteer.regionExists(token)) return true
+        if (gazetteer.looksLikeRegion(token) && !gazetteer.regionExists(token) && !namedRealPerson) return true
         if (gazetteer.looksLikePersonName(token)) {
             val stem = gazetteer.personNameStem(token)
             if (gazetteer.nameExists(stem)) continue

@@ -5,6 +5,10 @@
 # - 정답(ground truth)은 합성 데이터의 필드 값에서 자동 생성
 #
 # 사용법: python scripts/eval_search.py
+import sys as _sys
+from pathlib import Path as _P
+_sys.path.insert(0, str(_P(__file__).resolve().parent))
+import card_fingerprint as _cfp
 import json
 import math
 import os
@@ -66,6 +70,10 @@ PARTICLES = [
     # 이름 12개가 '인' 으로 끝나지만(성다인 등) 떼도 다른 이름과 충돌하지 않고,
     # analyze 가 원본 토큰도 함께 남기므로 잃는 게 없다.
     "인",
+    # 계사의 종결형 "-(이)야". "손서윤씨가 아니라 남다은씨야" 처럼 **대상을 정정하는**
+    # 말투에서 새 이름에 붙는데, 안 떼면 '남다은씨야' 가 이름으로 안 잡혀 정정이 통째로
+    # 무시된다(실측: Final50 v3 explicit_target_correction 6/10 실패, focus 가 옛 대상에 머묾).
+    "이야", "야",
     "은", "는", "이", "가", "을", "를", "에", "의", "와", "과", "도", "만", "랑", "로",
     # 존칭 — KeywordSearchRanker.kt와 동기화(드리프트 방지). "강서연씨" 매칭 실패 버그 수정.
     "씨", "님",
@@ -105,7 +113,18 @@ def analyze(raw_query: str):
     for t in normalized.split():
         if len(t) < 2 or t in STOPWORDS:
             continue
-        for v in (t, strip_particle(t)):
+        # 문장 끝 구두점이 붙어 있으면 조사도 못 떼고 가제티어 조회도 빗나간다
+        # ("남다은씨야." -> 이름 추출 0건). normalize 는 이메일 때문에 '.'을 남기므로
+        # **끝에 붙은 것만** 떼어 본다(이메일·전화는 구두점으로 끝나지 않는다).
+        forms = [t]
+        base = t.rstrip("._-")
+        if base and base != t:
+            forms.append(base)
+        for f in list(forms):
+            sp = strip_particle(f)
+            if sp and sp not in forms:
+                forms.append(sp)
+        for v in forms:
             digits = "".join(c for c in v if c.isdigit())
             variants = [v, digits] if len(digits) >= 3 and digits != v else [v]
             for x in variants:
@@ -483,9 +502,22 @@ def should_abstain(query, keyword_scored, vector_scores, gazetteer=None) -> bool
         return not keyword_scored
 
     if gazetteer is not None:
+        # 질의가 **데이터에 실재하는 사람**을 이미 지목했는지 먼저 본다.
+        # 지역 오탐을 막는 근거다: 분석기가 조사 붙은 형태를 그대로 남기는 탓에
+        # "이메일도"·"회사도" 가 '도(道)로 끝나는 3자 이상' 조건에 걸려 없는 지역으로
+        # 판정됐다(실측: "두미영 회사와 이메일도 알려줘" -> 기권. "이메일"만 쓰면 정상).
+        # 토큰 모양만으로는 "울릉도"와 구분이 안 된다 — 둘 다 같은 규칙에 걸린다.
+        # 그래서 '이미 실재하는 사람을 지목했으면 곁가지 토큰의 지명 오탐으로 전체를
+        # 기권시키지 않는다'로 가른다. 없는 지역만 물은 질의("울릉도 근무자")는 지목된
+        # 사람이 없으므로 그대로 기권한다.
+        named_real_person = any(
+            gazetteer.looks_like_person_name(t) and gazetteer.name_exists(gazetteer.person_name_stem(t))
+            for t in tokens
+        )
         for tok in tokens:
             if gazetteer.looks_like_region(tok) and not gazetteer.region_exists(tok):
-                return True
+                if not named_real_person:
+                    return True
             if gazetteer.looks_like_person_name(tok):
                 stem = gazetteer.person_name_stem(tok)
                 if gazetteer.name_exists(stem):
@@ -1102,6 +1134,12 @@ def evaluate_no_result(name, rankings, queries, score_lists=None):
 def main():
     rng = random.Random(42)
     cards = json.loads(CARDS_PATH.read_text(encoding="utf-8"))
+    # 벡터가 지금 카드와 맞는지 먼저 본다. 안 맞으면 시맨틱이 옛날 내용으로
+    # 돌아 지표가 조용히 틀어진다(id 는 그대로라 다른 검사로는 안 잡힌다).
+    _st, _msg = _cfp.check_stamp(CARDS_PATH.parent / _cfp.STAMP_NAME, cards)
+    if _st != "ok":
+        print(_cfp.banner(_st, _msg), flush=True)
+
     cards_by_id = {c["id"]: c for c in cards}
     prepared = []
     for c in cards:

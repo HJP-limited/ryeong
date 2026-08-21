@@ -116,4 +116,29 @@ class KeywordSearchRankerTest {
         tags,
         1L,
     )
+
+    @Test
+    fun `정정 말투의 이름을 추출한다`() {
+        // "손서윤씨가 아니라 남다은씨야" 에서 새 이름이 안 잡히면 정정이 통째로 무시되고
+        // focus 가 옛 대상에 머문다(실측: Final50 v3 정정 6/10 실패).
+        val t = KeywordSearchRanker.analyze("정정할게. 손서윤씨가 아니라 남다은씨야. 그분 회사는 어디야?").keywordTokens
+        assertTrue("남다은씨 미추출: $t", t.contains("남다은씨"))
+        assertTrue("손서윤씨 미추출: $t", t.contains("손서윤씨"))
+    }
+
+    @Test
+    fun `문장 끝 구두점이 붙어도 토큰이 나온다`() {
+        assertTrue(KeywordSearchRanker.analyze("남다은씨야.").keywordTokens.contains("남다은씨"))
+        assertTrue(KeywordSearchRanker.analyze("판교에는.").keywordTokens.contains("판교"))
+    }
+
+    @Test
+    fun `이메일과 전화번호는 구두점 제거에 망가지지 않는다`() {
+        // normalize 가 이메일 때문에 '.'을 남긴다. 끝에 붙은 것만 떼는 이유다.
+        val e = KeywordSearchRanker.analyze("hong@abc.co.kr 알려줘").keywordTokens
+        assertTrue("이메일 훼손: $e", e.contains("hong@abc.co.kr"))
+        val p = KeywordSearchRanker.analyze("010-1234-5678").keywordTokens
+        assertTrue("전화 훼손: $p", p.contains("010-1234-5678"))
+        assertTrue("숫자 사본 없음: $p", p.contains("01012345678"))
+    }
 }

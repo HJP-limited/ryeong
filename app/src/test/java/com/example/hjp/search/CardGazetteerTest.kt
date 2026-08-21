@@ -25,6 +25,31 @@ class CardGazetteerTest {
     private fun abstains(q: String, keywordHitCount: Int) =
         shouldAbstain(analyze(q), keywordHitCount, gazetteer)
 
+
+    // ---- 기권: '도'로 끝나는 조사 붙은 일반어를 지명으로 오인하지 않는다 ----
+
+    @Test
+    fun `조사 도가 붙은 속성어를 없는 지명으로 보지 않는다`() {
+        // 분석기는 조사를 뗀 형태와 원형을 **둘 다** 토큰으로 남긴다("이메일도", "이메일").
+        // 원형이 '도로 끝나는 3자 이상' 조건에 걸려 없는 지역으로 판정되면서,
+        // 실재하는 사람을 물었는데도 기권했다(실측: Final50 v3 benchmark 10/10 실패).
+        val 있는이름 = cards.first().name
+        listOf("회사와 이메일도 알려줘", "회사도 알려줘", "주소도", "부서도 알려줘").forEach {
+            assertFalse(
+                "'$있는이름 $it' 가 기권됨",
+                abstains("$있는이름 $it", keywordHitCount = 1),
+            )
+        }
+    }
+
+    @Test
+    fun `사람을 지목하지 않은 없는 지명은 그대로 기권한다`() {
+        // 위 완화가 지역 기권 자체를 무력화하면 안 된다. 지목된 사람이 없으면 기존대로다.
+        assertTrue(abstains("울릉도 근무자 찾아줘", keywordHitCount = 0))
+        assertTrue(abstains("세종특별자치시에 있는 개발자", keywordHitCount = 0))
+        assertTrue(abstains("백령도 사람 알려줘", keywordHitCount = 0))
+    }
+
     // ---- 기권: 없는 이름 -------------------------------------------------
 
     @Test

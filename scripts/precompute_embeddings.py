@@ -9,6 +9,10 @@
 #
 # 데이터를 다시 만들었으면(build_eval_dataset.py) 반드시 임베딩도 다시 만들 것 —
 # ids 순서와 카드 순서가 어긋나면 검색 결과가 통째로 뒤섞인다.
+import sys
+from pathlib import Path as _P
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+import card_fingerprint
 import argparse
 import json
 import struct
@@ -66,6 +70,12 @@ def main() -> None:
         for vec in vectors:
             f.write(struct.pack(f"<{len(vec)}f", *vec.tolist()))
 
+    # 벡터를 만든 '그때의 카드 내용'을 지문으로 남긴다. 이게 없으면 나중에 카드만 바꾸고
+    # 임베딩을 안 돌렸을 때 아무도 눈치채지 못한다(id 는 그대로라 무결성 검사도 통과한다).
+    stamp_path = ids_path.parent / card_fingerprint.STAMP_NAME
+    fp = card_fingerprint.write_stamp(stamp_path, cards, cards_path.name)
+    print(f"wrote fingerprint {fp[:16]}... -> {stamp_path}")
+
     print(f"wrote {len(ids)} ids -> {ids_path}")
     print(f"wrote {vectors_path} ({vectors_path.stat().st_size / 1024 / 1024:.1f} MB, dim={vectors.shape[1]})")
 
@@ -75,6 +85,7 @@ def main() -> None:
         shutil.copy(cards_path, ASSETS_DIR / "cards_seed.json")
         shutil.copy(ids_path, ASSETS_DIR / "cards_embeddings_ids.json")
         shutil.copy(vectors_path, ASSETS_DIR / "cards_embeddings.bin")
+        shutil.copy(stamp_path, ASSETS_DIR / card_fingerprint.STAMP_NAME)
         print(f"copied to assets -> {ASSETS_DIR}")
 
 

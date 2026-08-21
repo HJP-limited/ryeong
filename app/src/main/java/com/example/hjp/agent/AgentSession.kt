@@ -223,5 +223,15 @@ class AgentSession {
          * 다음 턴이 "그중에 …" 로 좁히려 할 때 이어받으려고 둔다.
          */
         const val KEY_LAST_FILTER_TERMS = "last_filter_terms"
+
+        /**
+         * 대화에서 화제가 된 인물을 **처음 나온 순서대로** 쉼표로 이어 둔 목록.
+         *
+         * "처음에 물어본 사람 전화번호는?" 같은 담화 순서 지시를 풀려면 지난 발화의
+         * 인물을 알아야 하는데, [recentMessages] 는 최근 8개(4턴)만 들고 있어서
+         * **그보다 오래된 인물에는 닿지 않는다**. 그래서 창과 무관하게 여기에 쌓아 둔다.
+         * 이름만 모으므로 길어져도 몇백 바이트다.
+         */
+        const val KEY_SUBJECT_HISTORY = "subject_history"
     }
 }

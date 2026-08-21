@@ -61,6 +61,21 @@ object ConversationalFollowup {
     private val CONTEXT_REFERENCES =
         listOf("아까", "방금", "앞서", "이전", "말한", "찾은", "기억")
 
+    /**
+     * 사람을 가리키는 지시어. 되짚기와 새 질문을 가르는 기준이다.
+     *
+     * 대명사를 [CONTEXT_REFERENCES] 에서 뺐어도 "아까"가 남아 여기로 새고 있었다 —
+     * "아까 그 사람 회사 알려줘" 가 되짚기로 잡혀 직전 답변을 재생했다
+     * (실측: Final50 v3 에서 sc_03·sc_08·lr_04·er_04 가 전부 이 경로).
+     * "아까 말한 회사 뭐였지"(되짚기)는 사람을 가리키지 않으므로 그대로 남는다.
+     */
+    private val PERSON_DEIXIS = listOf(
+        "그 사람", "그사람", "그 분", "그분", "이 사람", "이사람",
+        "저 사람", "저사람", "이 분", "이분", "걔",
+    )
+
+    internal fun pointsAtPerson(text: String) = PERSON_DEIXIS.any(text::contains)
+
     private val EXPLICIT_SEARCH_INTENT =
         listOf("검색", "찾아줘", "찾아 줘", "조회", "최신", "새로")
 
@@ -104,6 +119,8 @@ object ConversationalFollowup {
      */
     fun contextAnswer(session: AgentSession, question: String): String? {
         if (!isContextReference(question) || hasExplicitSearchIntent(question)) return null
+        // 사람을 가리키면 되짚기가 아니라 그 사람에 대한 **새 질문**이다.
+        if (pointsAtPerson(question)) return null
         val normalized = question.lowercase()
         val facts = session.conversationMemory.confirmedFacts
         val fact = when {

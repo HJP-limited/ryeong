@@ -34,6 +34,10 @@ object KeywordSearchRanker {
         // 이름 12개가 '인'으로 끝나지만(성다인 등) 떼도 다른 이름과 충돌하지 않고,
         // analyze 가 원본 토큰도 함께 남기므로 잃는 게 없다.
         "인",
+        // 계사의 종결형 "-(이)야". "손서윤씨가 아니라 남다은씨야" 처럼 **대상을 정정하는**
+        // 말투에서 새 이름에 붙는데, 안 떼면 '남다은씨야' 가 이름으로 안 잡혀 정정이 통째로
+        // 무시된다(실측: Final50 v3 정정 6/10 실패, focus 가 옛 대상에 머물렀다).
+        "이야", "야",
         "은", "는", "이", "가", "을", "를", "에", "의", "와", "과", "도", "만", "랑", "로",
         // 존칭 — "강서연씨"가 "강서연"으로 매칭 안 되던 버그의 원인이었음.
         "씨", "님",
@@ -56,7 +60,14 @@ object KeywordSearchRanker {
             .map { it.trim() }
             .filter { it.length >= 2 }
             .filterNot { it in stopWords }
-            .flatMap { token -> listOf(token, stripParticle(token)) }
+            // 문장 끝 구두점이 붙어 있으면 조사도 못 떼고 가제티어 조회도 빗나간다
+            // ("남다은씨야." -> 이름 추출 0건). normalize 는 이메일 때문에 '.'을 남기므로
+            // **끝에 붙은 것만** 떼어 본다(이메일·전화는 구두점으로 끝나지 않는다).
+            .flatMap { token ->
+                val base = token.trimEnd('.', '_', '-')
+                val forms = if (base.isNotEmpty() && base != token) listOf(token, base) else listOf(token)
+                forms + forms.map { stripParticle(it) }
+            }
             // "010-1234-5678"을 "01012345678"로도 찾을 수 있게 숫자만 남긴 사본을 추가
             .flatMap { token ->
                 val digits = token.filter { it.isDigit() }
