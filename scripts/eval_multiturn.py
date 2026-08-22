@@ -792,14 +792,33 @@ def main():
     def pct(a, b):
         return f"{a / b:.3f}" if b else "  -  "
 
+    # --- 지표를 정직하게 읽히도록 표시를 붙인다 -------------------------------
+    # 자체 감사에서 나온 것들이다. 팀원 지표(Slot Accuracy)를 "JGA 가 1.000 이면 중복"
+    # 이라고 걸렀는데, 같은 잣대를 대면 **우리 지표도 절반이 걸린다**. 숫자를 지우는
+    # 대신 한계를 같이 찍는다 — 지우면 회귀했을 때 진단할 근거가 사라진다.
+    def ceiling(v, n):
+        """천장에 붙은 지표는 '좋다'가 아니라 '안 나빠졌다'만 말한다."""
+        return "   <- 천장, 회귀 탐지용" if n and v >= n else ""
+
+    def power(n, need=30):
+        """표본이 작으면 1건이 몇 %p 인지 같이 보여준다."""
+        return f"   [표본 {n} — 1건이 {100 / n:.0f}%p]" if n and n < need else ""
+
     print("\n[1~3층 — 생성 불필요]")
-    print(f"  라우팅 정확도   {pct(stats['route_ok'], stats['route_n'])}  ({stats['route_ok']}/{stats['route_n']})")
-    print(f"  JGA            {pct(stats['jga_ok'], stats['jga_n'])}  ({stats['jga_ok']}/{stats['jga_n']})")
+    print(f"  라우팅 정확도   {pct(stats['route_ok'], stats['route_n'])}  ({stats['route_ok']}/{stats['route_n']})"
+          f"{ceiling(stats['route_ok'], stats['route_n'])}")
+    print(f"  JGA            {pct(stats['jga_ok'], stats['jga_n'])}  ({stats['jga_ok']}/{stats['jga_n']})"
+          f"{ceiling(stats['jga_ok'], stats['jga_n'])}")
     prec = stats["tp"] / (stats["tp"] + stats["fp"]) if stats["tp"] + stats["fp"] else 0.0
     rec = stats["tp"] / (stats["tp"] + stats["fn"]) if stats["tp"] + stats["fn"] else 0.0
     f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
-    print(f"  슬롯 P/R/F1     {prec:.3f} / {rec:.3f} / {f1:.3f}")
-    print(f"  턴별 Hit@5     {pct(stats['hit5_ok'], stats['hit5_n'])}  ({stats['hit5_ok']}/{stats['hit5_n']})")
+    # 슬롯 P/R/F1 은 JGA 가 1 아래로 내려갔을 때 **어디가** 틀렸는지 분해하는 용도다.
+    # JGA 가 만점이면 이 셋도 필연적으로 만점이라 같은 사실의 네 번째 보고가 된다 —
+    # 팀원의 Slot Accuracy 를 거른 것과 같은 이유이므로 우리 것도 그때만 찍는다.
+    if stats["jga_ok"] < stats["jga_n"]:
+        print(f"  슬롯 P/R/F1     {prec:.3f} / {rec:.3f} / {f1:.3f}   (JGA 실패분 분해)")
+    print(f"  턴별 Hit@5     {pct(stats['hit5_ok'], stats['hit5_n'])}  ({stats['hit5_ok']}/{stats['hit5_n']})"
+          f"   <- 아래 셋은 같은 사실을 셋으로 본다. 헤드라인은 하나만 쓸 것")
     n5 = stats["r5_n"] or 1
     print(f"  턴별 R@5       {stats['r5_sum'] / n5:.3f}  (분모 min(정답수,5) — eval_search.py 와 같은 공식)")
     print(f"  턴별 MRR       {stats['mrr_sum'] / n5:.3f}")
@@ -808,14 +827,19 @@ def main():
         print("\n[4~5층 — 생성 필요]")
         print(f"  체크리스트(LLM 턴)   {pct(stats['chk_llm_ok'], stats['chk_llm_n'])}"
               f"  ({stats['chk_llm_ok']}/{stats['chk_llm_n']})   <- 주 지표")
-        print(f"  체크리스트(결정적 턴) {pct(stats['chk_det_ok'], stats['chk_det_n'])}"
-              f"  ({stats['chk_det_ok']}/{stats['chk_det_n']})   * 고정 문자열이라 라우팅만 맞으면 통과")
+        # 체크리스트(결정적 턴)은 **동어반복**이라 헤드라인에서 뺐다 — 답변이 고정 문자열
+        # 이므로 라우팅만 맞으면 반드시 통과한다. 즉 라우팅 정확도를 다시 세는 것이다.
+        # 실패했을 때만 찍는다(그때는 라우팅이 이미 실패로 잡혔다는 뜻이라 교차 확인용).
+        if stats["chk_det_ok"] < stats["chk_det_n"]:
+            print(f"  체크리스트(결정적 턴) {pct(stats['chk_det_ok'], stats['chk_det_n'])}"
+                  f"  ({stats['chk_det_ok']}/{stats['chk_det_n']})   * 라우팅 실패의 반영")
         if stats["nocard_n"]:
             print(f"  무관 요청 카드 억제      {pct(stats['nocard_ok'], stats['nocard_n'])}"
-                  f"  ({stats['nocard_ok']}/{stats['nocard_n']})")
+                  f"  ({stats['nocard_ok']}/{stats['nocard_n']}){power(stats['nocard_n'])}")
         if args.repeat > 1:
             print(f"  pass^{args.repeat}              {pct(len(always_pass), len(scenarios))}"
-                  f"  ({len(always_pass)}/{len(scenarios)} 시나리오가 {args.repeat}번 모두 통과)")
+                  f"  ({len(always_pass)}/{len(scenarios)} 시나리오가 {args.repeat}번 모두 통과)"
+                  f"{power(len(scenarios))}")
         # 생성 시간은 기본 출력에서 뺀다. --latency 로만 본다.
         #
         # 이 값은 hybrid_server 가 9379 포트(litert-lm serve)로 HTTP 왕복하는 시간이라
