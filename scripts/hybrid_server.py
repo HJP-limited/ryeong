@@ -929,6 +929,12 @@ def empty_field_answer(question: str, card_ids):
     return f"{attr} 정보가 없습니다."
 
 
+# 속성 명사 앞에 흔히 붙는 군말. 이걸 떼고도 속성으로 시작하면 생략형 후속이다.
+# ("어느 부서야?", "그럼 주소는?") 지시 관형사(그/이/저)는 넣지 않는다 —
+# 그건 PRONOUNS 가 이미 담당한다.
+ELLIPSIS_LEAD_FILLERS = ("어느", "어떤", "그럼", "그러면", "근데", "그리고", "혹시", "이제", "또")
+
+
 def resolve_query(question: str, focus):
     if not focus:
         return question, False
@@ -940,7 +946,18 @@ def resolve_query(question: str, focus):
     # 엉뚱한 검색이 됐다(답변 '조건에 해당하는 명함을 찾지 못했습니다', focus 도 딴 사람으로 튐).
     # '4자리' 같은 자릿수 표현과 '4312' 같은 검색값을 가르려면 자릿수 길이를 봐야 한다.
     has_new_value = bool(re.search(r"\d{3,}", question))
-    is_ellip = (not has_new_value) and any(trimmed.startswith(n) for n in ATTRIBUTE_NOUNS)
+    # 속성 명사 **앞에 붙는 군말**을 떼고 본다. startswith 만 보면 "부서는?"은 되는데
+    # "어느 부서야?"는 새 검색으로 빠져 focus 가 엉뚱한 사람으로 튄다 — 그 한 턴이
+    # 오염시키면 **뒤 턴이 연쇄로 무너진다**(실측: 표현을 다양화하자 실패 2건 -> 32건,
+    # 그중 대부분이 이 한 가지 말투에서 시작된 연쇄였다).
+    stripped = trimmed
+    for w in ELLIPSIS_LEAD_FILLERS:
+        if stripped.startswith(w):
+            stripped = stripped[len(w):].lstrip()
+            break
+    is_ellip = (not has_new_value) and any(
+        t.startswith(n) for t in (trimmed, stripped) for n in ATTRIBUTE_NOUNS
+    )
     if not has_pron and not is_ellip:
         return question, False
     q = question

@@ -120,6 +120,54 @@ def turn(q, route=None, slots=None, gold=None, must=None, must_not=None, no_card
             "must": must or [], "must_not": must_not or [], "no_cards": no_cards}
 
 
+# ---------------------------------------------------------------------------
+# 발화 표현 풀 — 같은 뜻을 여러 말투로 둔다.
+#
+# **왜 필요한가(측정)**: 유형당 표현이 1개면 분모만 크고 덮는 범위는 좁다. 실측으로
+# 386턴이 '틀' 93종뿐이었고 상위 10개 틀이 전체의 69%였다. 그 상태에서 외부 고정셋
+# (Final50 v3, 50시나리오)이 우리가 못 잡던 버그 5개를 찾아냈다 — 같은 의도를 10가지로
+# 말해 보니 0/10 으로 전멸한 유형이 있었다("처음에 물어본 사람" 계열).
+#
+# 표현만 바꾸고 **기대 route·슬롯·정답은 그대로**여야 한다. 뜻이 달라지는 변형은 넣지 않는다.
+# 한 발화에 속성 명사를 두 개 넣지 않는다 — 여러 칸 요청으로 잡혀 다른 경로를 탄다.
+# rng 로 고르므로 seed 가 같으면 재현된다.
+ASK_COMPANY = [
+    "{n}씨 회사가 어디야?", "{n}씨 어디 다녀?", "{n}씨 직장이 어디지?",
+    "{n}씨 회사 알려줘", "{n}씨 소속이 어디야?", "{n}씨 어느 회사 다녀?",
+]
+ASK_DEPARTMENT_NAMED = [
+    "{n}씨 부서는?", "{n}씨 어느 부서야?", "{n}씨 부서 알려줘", "{n}씨 소속 부서가 뭐야?",
+]
+ASK_ONLY_NAME = ["{n}씨는?", "{n}씨도?", "{n}씨는 어때?", "그럼 {n}씨는?"]
+
+# 주어를 생략한 후속. 속성 명사로 시작해야 focus 가 앞에 붙는다(resolveSearchQuery).
+ELLIPTIC = {
+    "address": ["주소는?", "주소 알려줘", "주소가 어떻게 돼?", "주소는 뭐야?"],
+    "title": ["직급은?", "직함이 뭐야?", "직급 알려줘", "직책은?"],
+    "department": ["부서는?", "부서 알려줘", "어느 부서야?", "부서가 뭐야?"],
+    "email": ["이메일은?", "이메일 알려줘", "메일 주소는?", "이메일이 뭐야?"],
+    "phone": ["전화번호는?", "연락처 알려줘", "전화번호 뭐야?", "번호는?"],
+}
+
+PLURAL_FOLLOWUP = [
+    "그 사람들 회사 알려줘", "그분들 회사는?", "그 사람들 어디 다녀?",
+    "그 사람들 소속 알려줘",
+]
+RECALL_COMPANY = [
+    "아까 말한 회사 뭐였지", "방금 말한 회사가 뭐였더라", "앞서 말한 회사 뭐였어",
+    "아까 찾은 회사 뭐였지",
+]
+SEARCH_LOC_TITLE = [
+    "{loc}에 있는 {t} 찾아줘", "{loc} {t} 알려줘", "{loc}에서 일하는 {t} 찾아줘",
+    "{loc}에 {t} 있어?",
+]
+
+
+def pick(rng, pool, **kw):
+    """표현 풀에서 하나 고른다. seed 가 같으면 같은 것이 나온다."""
+    return rng.choice(pool).format(**kw)
+
+
 def build_scenarios(cards, rng):
     """
     시나리오를 카드 데이터에서 생성한다.
@@ -162,12 +210,14 @@ def build_scenarios(cards, rng):
     for c in pool[:25]:
         gold, slots = [c["id"]], person_slots(c)
         add("이름+생략형후속", [
-            turn(f"{c['name']}씨 회사가 어디야?", "search", slots, gold,
+            turn(pick(rng, ASK_COMPANY, n=c["name"]), "search", slots, gold,
                  must=[company_variants(c["company"])], must_not=REJECTIONS),
-            turn("주소는?", "search", slots, gold,
+            turn(pick(rng, ELLIPTIC["address"]), "search", slots, gold,
                  must=[address_variants(c["address"])], must_not=REJECTIONS),
-            turn("직급은?", "search", slots, gold, must=[[c["title"]]], must_not=REJECTIONS),
-            turn("부서는?", "search", slots, gold, must=[[c["department"]]], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["title"]), "search", slots, gold,
+                 must=[[c["title"]]], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["department"]), "search", slots, gold,
+                 must=[[c["department"]]], must_not=REJECTIONS),
         ])
 
     # (2) 6턴 장문 — 최근 창(메시지 8개 = 4턴)을 넘겨 historyDigest 로 접히는 구간
@@ -175,24 +225,28 @@ def build_scenarios(cards, rng):
         gold, slots = [c["id"]], person_slots(c)
         tail = re.sub(r"\D", "", c.get("phone") or "")[-4:]
         add("6턴 장문", [
-            turn(f"{c['name']}씨 회사가 어디야?", "search", slots, gold,
+            turn(pick(rng, ASK_COMPANY, n=c["name"]), "search", slots, gold,
                  must=[company_variants(c["company"])], must_not=REJECTIONS),
-            turn("주소는?", "search", slots, gold,
+            turn(pick(rng, ELLIPTIC["address"]), "search", slots, gold,
                  must=[address_variants(c["address"])], must_not=REJECTIONS),
-            turn("직급은?", "search", slots, gold, must=[[c["title"]]], must_not=REJECTIONS),
-            turn("부서는?", "search", slots, gold, must=[[c["department"]]], must_not=REJECTIONS),
-            turn("이메일은?", "search", slots, gold, must=[[c["email"]]], must_not=REJECTIONS),
-            turn("전화번호는?", "search", slots, gold, must=[[c["phone"], tail]], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["title"]), "search", slots, gold,
+                 must=[[c["title"]]], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["department"]), "search", slots, gold,
+                 must=[[c["department"]]], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["email"]), "search", slots, gold,
+                 must=[[c["email"]]], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["phone"]), "search", slots, gold,
+                 must=[[c["phone"], tail]], must_not=REJECTIONS),
         ])
 
     # (3) 주제 전환 — 다른 사람으로 갔다가 처음 사람으로 돌아온다(focus 가 따라와야 한다)
     for a, b in zip(pool[35:43], pool[43:51]):
         add("주제 전환", [
-            turn(f"{a['name']}씨 회사가 어디야?", "search", person_slots(a), [a["id"]],
+            turn(pick(rng, ASK_COMPANY, n=a["name"]), "search", person_slots(a), [a["id"]],
                  must=[company_variants(a["company"])], must_not=REJECTIONS),
-            turn(f"{b['name']}씨는?", "search", person_slots(b), [b["id"]],
+            turn(pick(rng, ASK_ONLY_NAME, n=b["name"]), "search", person_slots(b), [b["id"]],
                  must=[company_variants(b["company"])], must_not=REJECTIONS),
-            turn(f"{a['name']}씨 부서는?", "search", person_slots(a), [a["id"]],
+            turn(pick(rng, ASK_DEPARTMENT_NAMED, n=a["name"]), "search", person_slots(a), [a["id"]],
                  must=[[a["department"]]], must_not=REJECTIONS),
         ])
 
@@ -208,10 +262,10 @@ def build_scenarios(cards, rng):
     for (loc, title), ids in viable[:15]:
         want = [by_id_all[i]["name"] for i in ids] + [f"총 {len(ids)}명"]
         add("지역+직함->후속", [
-            turn(f"{loc}에 있는 {title} 찾아줘", "search",
+            turn(pick(rng, SEARCH_LOC_TITLE, loc=loc, t=title), "search",
                  {"names": [], "titles": [title], "locations": [loc]}, ids,
                  must=[want], must_not=REJECTIONS),
-            turn("그 사람들 회사 알려줘", "followup", None, ids, must_not=REJECTIONS),
+            turn(pick(rng, PLURAL_FOLLOWUP), "followup", None, ids, must_not=REJECTIONS),
         ])
 
     # (5) 카운트 -> 좁히기 (결정적 경로에서 검색 경로로 넘어가는 전환)
@@ -299,7 +353,7 @@ def build_scenarios(cards, rng):
         add("문맥참조", [
             turn(f"{c['name']}씨 회사가 어디야?", "search", person_slots(c), [c["id"]],
                  must=[company_variants(c["company"])], must_not=REJECTIONS),
-            turn("아까 말한 회사 뭐였지", "context_answer"),
+            turn(pick(rng, RECALL_COMPANY), "context_answer"),
         ])
 
     # (11) 사실 정정 — 같은 key 를 덮어써야 한다(옛 값이 남으면 안 된다)

@@ -584,4 +584,30 @@ class MainActivityTest {
         assertEquals(listOf("전화번호", "이메일"),
             requestedFields("전화번호랑 이메일 알려줘").map { it.second })
     }
+
+    // ---- 생략형 후속: 속성 명사 앞의 군말 ----
+
+    @Test
+    fun `군말이 앞에 붙어도 생략형 후속으로 본다`() {
+        // "부서는?"은 되는데 "어느 부서야?"가 새 검색으로 빠지면 focus 가 엉뚱한 사람으로
+        // 튀고, 그 한 턴이 뒤 대화를 통째로 무너뜨린다(실측 32건 연쇄).
+        listOf("어느 부서야?", "그럼 주소는?", "혹시 이메일은?", "근데 직급이 뭐야?").forEach {
+            assertEquals("$it -> focus 안 붙음", "김서영 $it", resolveSearchQuery(it, "김서영"))
+        }
+    }
+
+    @Test
+    fun `군말 없는 기존 형태도 그대로 동작한다`() {
+        listOf("부서는?", "주소는?", "전화번호는?").forEach {
+            assertEquals("김서영 $it", resolveSearchQuery(it, "김서영"))
+        }
+    }
+
+    @Test
+    fun `새 인물이나 독립 질문은 건드리지 않는다`() {
+        // 군말 완화가 무관한 질문까지 focus 에 묶으면 안 된다.
+        listOf("판교에 있는 개발자 찾아줘", "오늘 날씨 어때?", "전체 몇 장이야?").forEach {
+            assertEquals(it, resolveSearchQuery(it, "김서영"))
+        }
+    }
 }

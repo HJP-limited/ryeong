@@ -1,0 +1,4495 @@
+{
+  "schema_version": "3.0",
+  "dataset_version": "2026-08-20-final50-v3-card-grounded",
+  "description": "OCR business-card search agent용 card-grounded fixed multi-turn final-turn challenge benchmark. 실제 cards_eval1000.json의 명함 값만 gold로 사용하며, 50개 시나리오 각각 정확히 1개의 target evaluation turn을 갖는다.",
+  "scope": {
+    "benchmark_type": "fixed_card_grounded_multiturn_final_turn",
+    "scenario_count": 50,
+    "evaluated_turn_count": 50,
+    "primary_answer_metrics": [
+      "Answer F1",
+      "Exact Match"
+    ],
+    "state_metrics_note": "JGA/Slot Accuracy/Slot Precision-Recall-F1은 구조화된 internal-state regression suite에서 별도 계산한다.",
+    "retrieval_metrics_note": "Recall@5/MRR은 retrieval output이 있는 평가 경로에서 별도 계산한다."
+  },
+  "reference_cards": {
+    "filename": "cards_eval1000.json",
+    "count": 1000,
+    "canonical_sha256": "760e980afda23a30a83b333861fb0b0eab74b704208a0bf75ab674259dd47e05"
+  },
+  "category_counts": {
+    "long_range_reactivation": 10,
+    "local_state_carryover": 10,
+    "explicit_target_correction": 10,
+    "discourse_coreference": 10,
+    "unanswerable": 10
+  },
+  "design_guardrails": [
+    "모든 인물과 개인정보 gold는 cards_eval1000.json에 실제 존재해야 한다.",
+    "임의의 제3자 사실이나 가짜 명함 정보를 scenario에 추가하지 않는다.",
+    "각 scenario는 정확히 하나의 evaluated target turn을 갖는다.",
+    "Correction은 명시적인 사용자 정정 표현을 포함한다.",
+    "Long-range reactivation은 target 이후 다른 실제 인물의 방해 문맥을 포함한다.",
+    "Discourse coreference는 단순 최신 focus가 아닌 비최신 인물 참조를 포함한다.",
+    "Unanswerable은 실제 카드에서 해당 field가 비어 있는 경우만 사용한다."
+  ],
+  "scenarios": [
+    {
+      "id": "lr_01",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T001",
+        "T017",
+        "T019",
+        "T022",
+        "T023"
+      ],
+      "target_card_id": "T001",
+      "competitor_card_ids": [
+        "T017",
+        "T019",
+        "T022",
+        "T023"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 6,
+      "notes": "총 6턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "손다은씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "국은영씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "예예준씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주주원씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "선현우씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "처음에 물어본 사람 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3000-6000"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3016-6016",
+            "010-3018-6018",
+            "010-3021-6021",
+            "010-3022-6022"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 5,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3000-6000"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_02",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T002",
+        "T019",
+        "T022",
+        "T023",
+        "T026"
+      ],
+      "target_card_id": "T002",
+      "competitor_card_ids": [
+        "T019",
+        "T022",
+        "T023",
+        "T026"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 6,
+      "notes": "총 6턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "문지영씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "예예준씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주주원씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "선현우씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "도지유씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "맨 처음 질문한 분 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3001-6001"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3018-6018",
+            "010-3021-6021",
+            "010-3022-6022",
+            "010-3025-6025"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 5,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3001-6001"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_03",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T003",
+        "T022",
+        "T023",
+        "T026",
+        "T027",
+        "T028",
+        "T029"
+      ],
+      "target_card_id": "T003",
+      "competitor_card_ids": [
+        "T022",
+        "T023",
+        "T026",
+        "T027",
+        "T028",
+        "T029"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 8,
+      "notes": "총 8턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "설지아씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주주원씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "선현우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "도지유씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "현채원씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "원지원씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모가온씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "첫 번째로 물어본 사람 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3002-6002"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3021-6021",
+            "010-3022-6022",
+            "010-3025-6025",
+            "010-3026-6026",
+            "010-3027-6027",
+            "010-3028-6028"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 7,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3002-6002"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_04",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T004",
+        "T023",
+        "T026",
+        "T027",
+        "T028",
+        "T029",
+        "T030"
+      ],
+      "target_card_id": "T004",
+      "competitor_card_ids": [
+        "T023",
+        "T026",
+        "T027",
+        "T028",
+        "T029",
+        "T030"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 8,
+      "notes": "총 8턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "백이안씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "선현우씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "도지유씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "현채원씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "원지원씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모가온씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "기동주씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아까 처음에 물어본 분 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3003-6003"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3022-6022",
+            "010-3025-6025",
+            "010-3026-6026",
+            "010-3027-6027",
+            "010-3028-6028",
+            "010-3029-6029"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 7,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3003-6003"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_05",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T005",
+        "T026",
+        "T027",
+        "T028",
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037"
+      ],
+      "target_card_id": "T005",
+      "competitor_card_ids": [
+        "T026",
+        "T027",
+        "T028",
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 10,
+      "notes": "총 10턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "설은지씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "도지유씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "현채원씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "원지원씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모가온씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "기동주씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "한보름씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "공성민씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "추시우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "처음 언급한 사람 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3004-6004"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3025-6025",
+            "010-3026-6026",
+            "010-3027-6027",
+            "010-3028-6028",
+            "010-3029-6029",
+            "010-3033-6033",
+            "010-3034-6034",
+            "010-3036-6036"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 9,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3004-6004"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_06",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T006",
+        "T027",
+        "T028",
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038"
+      ],
+      "target_card_id": "T006",
+      "competitor_card_ids": [
+        "T027",
+        "T028",
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 10,
+      "notes": "총 10턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "선영희씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "현채원씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "원지원씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모가온씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "기동주씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "한보름씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "공성민씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "추시우씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손서윤씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "맨 처음 확인했던 사람 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3005-6005"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3026-6026",
+            "010-3027-6027",
+            "010-3028-6028",
+            "010-3029-6029",
+            "010-3033-6033",
+            "010-3034-6034",
+            "010-3036-6036",
+            "010-3037-6037"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 9,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3005-6005"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_07",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T008",
+        "T028",
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039"
+      ],
+      "target_card_id": "T008",
+      "competitor_card_ids": [
+        "T028",
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 10,
+      "notes": "총 10턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "황미영씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "원지원씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모가온씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "기동주씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "한보름씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "공성민씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "추시우씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손서윤씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "남다은씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "첫 번째 사람 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3007-6007"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3027-6027",
+            "010-3028-6028",
+            "010-3029-6029",
+            "010-3033-6033",
+            "010-3034-6034",
+            "010-3036-6036",
+            "010-3037-6037",
+            "010-3038-6038"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 9,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3007-6007"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_08",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T009",
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039",
+        "T040",
+        "T041",
+        "T042"
+      ],
+      "target_card_id": "T009",
+      "competitor_card_ids": [
+        "T029",
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039",
+        "T040",
+        "T041",
+        "T042"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 12,
+      "notes": "총 12턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "성다인씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모가온씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "기동주씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "한보름씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "공성민씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "추시우씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손서윤씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "남다은씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "마수진씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "하예은씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "서보름씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "처음 회사 물어본 사람 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3008-6008"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3028-6028",
+            "010-3029-6029",
+            "010-3033-6033",
+            "010-3034-6034",
+            "010-3036-6036",
+            "010-3037-6037",
+            "010-3038-6038",
+            "010-3039-6039",
+            "010-3040-6040",
+            "010-3041-6041"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 11,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3008-6008"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_09",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T012",
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039",
+        "T040",
+        "T041",
+        "T042",
+        "T045"
+      ],
+      "target_card_id": "T012",
+      "competitor_card_ids": [
+        "T030",
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039",
+        "T040",
+        "T041",
+        "T042",
+        "T045"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 12,
+      "notes": "총 12턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "라은정씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "기동주씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "한보름씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "공성민씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "추시우씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손서윤씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "남다은씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "마수진씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "하예은씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "서보름씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "신준우씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "대화 맨 처음에 물어본 분 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3011-6011"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3029-6029",
+            "010-3033-6033",
+            "010-3034-6034",
+            "010-3036-6036",
+            "010-3037-6037",
+            "010-3038-6038",
+            "010-3039-6039",
+            "010-3040-6040",
+            "010-3041-6041",
+            "010-3044-6044"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 11,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3011-6011"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "lr_10",
+      "category": "long_range_reactivation",
+      "benchmark_basis": [
+        "LoCoMo conversational long-term QA (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T015",
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039",
+        "T040",
+        "T041",
+        "T042",
+        "T045",
+        "T046"
+      ],
+      "target_card_id": "T015",
+      "competitor_card_ids": [
+        "T034",
+        "T035",
+        "T037",
+        "T038",
+        "T039",
+        "T040",
+        "T041",
+        "T042",
+        "T045",
+        "T046"
+      ],
+      "target_fields": [
+        "phone"
+      ],
+      "answerable": true,
+      "context_length_turns": 12,
+      "notes": "총 12턴. 첫 번째 실제 명함 인물을 확인한 뒤 여러 실제 인물의 방해 턴을 거치고, 최근 4턴 원문 창을 벗어난 과거 target을 다시 참조해 전화번호를 회수하는 장거리 문맥 재활성화 테스트",
+      "turns": [
+        {
+          "user": "허준우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "한보름씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "공성민씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "추시우씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손서윤씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "남다은씨 부서는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "마수진씨 전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "하예은씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "서보름씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "신준우씨 이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "신여름씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "가장 먼저 물어본 사람 전화번호는?",
+          "evaluate": true,
+          "expected_contains": [
+            "010-3014-6014"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "010-3033-6033",
+            "010-3034-6034",
+            "010-3036-6036",
+            "010-3037-6037",
+            "010-3038-6038",
+            "010-3039-6039",
+            "010-3040-6040",
+            "010-3041-6041",
+            "010-3044-6044",
+            "010-3045-6045"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 11,
+          "requested_fields": [
+            "phone"
+          ],
+          "gold_answer_values": {
+            "phone": "010-3014-6014"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_01",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T017"
+      ],
+      "target_card_id": "T017",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "국은영씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "이메일도 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 한 번에 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "주식회사 한올전자",
+            "현장소장",
+            "설비팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "주식회사 한올전자",
+            "title": "현장소장",
+            "department": "설비팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_02",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T019"
+      ],
+      "target_card_id": "T019",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "예예준씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주소도 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그분 회사랑 직급, 부서 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "주식회사 대한식품",
+            "콘텐츠 PD",
+            "퍼포먼스마케팅팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "주식회사 대한식품",
+            "title": "콘텐츠 PD",
+            "department": "퍼포먼스마케팅팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_03",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T022"
+      ],
+      "target_card_id": "T022",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "주주원씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "전화번호도 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아까 그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "주식회사 실버라인",
+            "품질관리자",
+            "물류팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "주식회사 실버라인",
+            "title": "품질관리자",
+            "department": "물류팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_04",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T023"
+      ],
+      "target_card_id": "T023",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "선현우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주소가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람의 회사와 직급, 부서를 정리해줘",
+          "evaluate": true,
+          "expected_contains": [
+            "주식회사 다래식품",
+            "생산관리자",
+            "구매팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "주식회사 다래식품",
+            "title": "생산관리자",
+            "department": "구매팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_05",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T026"
+      ],
+      "target_card_id": "T026",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "도지유씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그분 회사, 직급, 부서가 뭐야?",
+          "evaluate": true,
+          "expected_contains": [
+            "(주) 유니콘게임즈",
+            "인사담당",
+            "인사팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "(주) 유니콘게임즈",
+            "title": "인사담당",
+            "department": "인사팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_06",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T027"
+      ],
+      "target_card_id": "T027",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "현채원씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "이메일도 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "계속 이야기한 그 사람 회사, 직급, 부서 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(유) 강남메디컬",
+            "보안담당",
+            "모바일개발팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "(유) 강남메디컬",
+            "title": "보안담당",
+            "department": "모바일개발팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_07",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T028"
+      ],
+      "target_card_id": "T028",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "원지원씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사하고 직급, 부서를 같이 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "유한회사 가온메디",
+            "공인중개사",
+            "파트너십팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "유한회사 가온메디",
+            "title": "공인중개사",
+            "department": "파트너십팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_08",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T029"
+      ],
+      "target_card_id": "T029",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "모가온씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "전화번호는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아까부터 물어본 그분의 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(주) 미래바이오",
+            "사무관",
+            "프로덕트팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "(주) 미래바이오",
+            "title": "사무관",
+            "department": "프로덕트팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_09",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T030"
+      ],
+      "target_card_id": "T030",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "기동주씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "이메일은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주소도 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사명, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(유) 뉴로텍",
+            "수석연구원",
+            "기술연구소"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "(유) 뉴로텍",
+            "title": "수석연구원",
+            "department": "기술연구소"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "sc_10",
+      "category": "local_state_carryover",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state tracking (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T034"
+      ],
+      "target_card_id": "T034",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "명시적으로 검색한 한 실제 명함 인물의 focus가 짧은 연속 후속 턴 동안 유지되고, 마지막 생략형 질문이 같은 인물을 가리키는지 평가",
+      "turns": [
+        {
+          "user": "한보름씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "주소 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "이메일도 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "지금 이야기 중인 사람의 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "누리소프트",
+            "컨설턴트",
+            "서비스기획팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "누리소프트",
+            "title": "컨설턴트",
+            "department": "서비스기획팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_01",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T035",
+        "T037"
+      ],
+      "target_card_id": "T037",
+      "competitor_card_id": "T035",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "공성민씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "공성민씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아니, 공성민씨 말고 추시우씨를 물어본 거야. 추시우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "주식회사 정담회계",
+            "Data Scientist",
+            "ML플랫폼팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "(유) 한올제약",
+            "교육기획자",
+            "서비스기획팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "주식회사 정담회계",
+            "title": "Data Scientist",
+            "department": "ML플랫폼팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_02",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T038",
+        "T039"
+      ],
+      "target_card_id": "T039",
+      "competitor_card_id": "T038",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "손서윤씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손서윤씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "정정할게. 손서윤씨가 아니라 남다은씨야. 그분 회사는 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "네오모빌리티",
+            "프론트엔드 개발자",
+            "개발2팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "미래에듀",
+            "백엔드 개발자",
+            "모바일개발팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "네오모빌리티",
+            "title": "프론트엔드 개발자",
+            "department": "개발2팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_03",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T040",
+        "T041"
+      ],
+      "target_card_id": "T041",
+      "competitor_card_id": "T040",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "마수진씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "마수진씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아니야, 내가 찾는 사람은 마수진씨 말고 하예은씨야. 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(유) 스타테크",
+            "시니어 디자이너",
+            "프로덕트디자인팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "유한회사 하이랩스",
+            "SRE",
+            "데이터플랫폼팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "(유) 스타테크",
+            "title": "시니어 디자이너",
+            "department": "프로덕트디자인팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_04",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T042",
+        "T045"
+      ],
+      "target_card_id": "T045",
+      "competitor_card_id": "T042",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "서보름씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "서보름씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "서보름씨 말고 신준우씨로 바꿔서 볼게. 그분 회사 알려줘.",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(유) 대성전자",
+            "회계사",
+            "회계팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "유한회사 solid",
+            "UX 디자이너",
+            "프로덕트디자인팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "(유) 대성전자",
+            "title": "회계사",
+            "department": "회계팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_05",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T046",
+        "T048"
+      ],
+      "target_card_id": "T048",
+      "competitor_card_id": "T046",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "신여름씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "신여름씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "방금 사람 말고 백예준씨를 말한 거야. 백예준씨 회사는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(주) 한국바이오메드",
+            "전문의",
+            "진료부"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "터닝포인트",
+            "펀드매니저",
+            "재무팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "(주) 한국바이오메드",
+            "title": "전문의",
+            "department": "진료부"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_06",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T050",
+        "T052"
+      ],
+      "target_card_id": "T052",
+      "competitor_card_id": "T050",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "하예원씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "하예원씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "정정하면 하예원씨가 아니라 곽시우씨야. 그 사람 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "유한회사 청담법률",
+            "현장소장",
+            "품질관리팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "주식회사 파도소프트",
+            "간호사",
+            "의료지원팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "유한회사 청담법률",
+            "title": "현장소장",
+            "department": "품질관리팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_07",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T055",
+        "T056"
+      ],
+      "target_card_id": "T056",
+      "competitor_card_id": "T055",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "정가영씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "정가영씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아니, 대상은 선민서씨야. 정가영씨 말고. 회사 알려줘.",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "주식회사 그린어패럴",
+            "해외영업 담당",
+            "해외영업팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "(유) 대륙건설",
+            "영업팀장",
+            "영업기획팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "주식회사 그린어패럴",
+            "title": "해외영업 담당",
+            "department": "해외영업팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_08",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T057",
+        "T059"
+      ],
+      "target_card_id": "T059",
+      "competitor_card_id": "T057",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "고보름씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "고보름씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "내가 잘못 말했어. 고보름씨 말고 용준서씨 회사가 궁금해.",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "유한회사 클라우드나인",
+            "물류관리자",
+            "물류팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "인피니티게임즈",
+            "품질관리자",
+            "생산관리팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "유한회사 클라우드나인",
+            "title": "물류관리자",
+            "department": "물류팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_09",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "T058",
+        "S00004"
+      ],
+      "target_card_id": "S00004",
+      "competitor_card_id": "T058",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "윤우진씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "윤우진씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 말고 범하늘씨로 정정할게. 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "유한회사 옴니메디칼",
+            "SRE",
+            "DevOps팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "은하수엔터",
+            "생산관리자",
+            "생산관리팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "유한회사 옴니메디칼",
+            "title": "SRE",
+            "department": "DevOps팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "cu_10",
+      "category": "explicit_target_correction",
+      "benchmark_basis": [
+        "SGD/MultiWOZ dialogue-state update (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00012",
+        "S00031"
+      ],
+      "target_card_id": "S00031",
+      "competitor_card_id": "S00012",
+      "target_fields": [
+        "company",
+        "title",
+        "department"
+      ],
+      "answerable": true,
+      "notes": "인물 A를 먼저 조회한 뒤 사용자가 명시적인 정정 표현으로 인물 B를 지정했을 때 active target이 B로 갱신되고, 이후 생략형 질문에서도 이전 A의 정보가 섞이지 않는지 평가",
+      "turns": [
+        {
+          "user": "홍동현씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "홍동현씨 직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아니 홍동현씨가 아니라 위수민씨를 찾아줘. 회사는 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사, 직급, 부서를 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "유한회사 대성푸드",
+            "Platform Engineer",
+            "인프라팀"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "유한회사 내셔널리테일",
+            "디자이너",
+            "UX팀"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 1,
+          "requested_fields": [
+            "company",
+            "title",
+            "department"
+          ],
+          "gold_answer_values": {
+            "company": "유한회사 대성푸드",
+            "title": "Platform Engineer",
+            "department": "인프라팀"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_01",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00033",
+        "S00043"
+      ],
+      "target_card_id": "S00033",
+      "competitor_card_id": "S00043",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "두미영씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "현지호씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "현지호씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "첫 번째로 물어본 사람 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "코랄글로벌",
+            "miyeongdu@koralgeullobeol.kr"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "주식회사 내추럴기계",
+            "jihohyeon@naechureolgigye.co.kr"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "코랄글로벌",
+            "email": "miyeongdu@koralgeullobeol.kr"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_02",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00048",
+        "S00056"
+      ],
+      "target_card_id": "S00048",
+      "competitor_card_id": "S00056",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "두은지씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "백사랑씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "백사랑씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "맨 처음 물어본 분 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "주식회사 퓨어그룹",
+            "eunjidu@pyueogeurup.com"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "온누리코퍼레이션",
+            "salangbaeg@onnurikopeorei.kr"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "주식회사 퓨어그룹",
+            "email": "eunjidu@pyueogeurup.com"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_03",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00057",
+        "S00072"
+      ],
+      "target_card_id": "S00057",
+      "competitor_card_id": "S00072",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "주대현씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "엄서영씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "엄서영씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "처음 회사 물어본 사람 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(주) 라온에너지",
+            "daehyeonju@raoneneoji.co.kr"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "(주) 스타",
+            "seoyeongeom@seuta.co.kr"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "(주) 라온에너지",
+            "email": "daehyeonju@raoneneoji.co.kr"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_04",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00076",
+        "S00089"
+      ],
+      "target_card_id": "S00076",
+      "competitor_card_id": "S00089",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "문진우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모서연씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "모서연씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "아까 첫 번째로 언급한 분 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(주)아쿠아패키징",
+            "jinumun@akuapaekijing.net"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "유한회사 글로벌즈건설",
+            "seoyeonmo@geullobeoljeugeon.com"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "(주)아쿠아패키징",
+            "email": "jinumun@akuapaekijing.net"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_05",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00098",
+        "S00099"
+      ],
+      "target_card_id": "S00098",
+      "competitor_card_id": "S00099",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "연혜린씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "천건우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "천건우씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "처음 등장한 사람 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "유한회사 삼성메디칼",
+            "hyelinyeon@samseongmedikal.com"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "유한회사 기가기업",
+            "geonucheon@gigagieop.com"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "유한회사 삼성메디칼",
+            "email": "hyelinyeon@samseongmedikal.com"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_06",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00100",
+        "S00105"
+      ],
+      "target_card_id": "S00100",
+      "competitor_card_id": "S00105",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "예가온씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "선현주씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "선현주씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "첫 번째 사람 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(주)벤처스시스템",
+            "gaonye@bencheoseusiseutem.kr"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "(주) 제주케미칼",
+            "hyeonjuseon@jejukemikal.net"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "(주)벤처스시스템",
+            "email": "gaonye@bencheoseusiseutem.kr"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_07",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00111",
+        "S00124"
+      ],
+      "target_card_id": "S00111",
+      "competitor_card_id": "S00124",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "이현준씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "옥진우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "옥진우씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "대화에서 먼저 물어본 분 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "(주)서비스건설",
+            "hyeonjuni@seobiseugeonseol.com"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "주식회사 다온글로벌",
+            "jinuog@daongeullobeol.com"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "(주)서비스건설",
+            "email": "hyeonjuni@seobiseugeonseol.com"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_08",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00132",
+        "S00135"
+      ],
+      "target_card_id": "S00132",
+      "competitor_card_id": "S00135",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "현민호씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "송다은씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "송다은씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "맨 처음 확인한 사람 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "조선그룹",
+            "minhohyeon@joseongeurup.net"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "(주)토파즈물산",
+            "daeunsong@topajeumulsan.co.kr"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "조선그룹",
+            "email": "minhohyeon@joseongeurup.net"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_09",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00152",
+        "S00161"
+      ],
+      "target_card_id": "S00152",
+      "competitor_card_id": "S00161",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "오하늘씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "원영희씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "원영희씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "처음에 질문했던 그분 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "삼성프로덕션",
+            "haneulo@samseongpeurodeok.co.kr"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "(주)노바미디어",
+            "yeonghuiwon@nobamidieo.co.kr"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "삼성프로덕션",
+            "email": "haneulo@samseongpeurodeok.co.kr"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "er_10",
+      "category": "discourse_coreference",
+      "benchmark_basis": [
+        "MultiWOZ 2.3 co-reference annotation (구조 참고)",
+        "SGD/MultiWOZ dialogue context/state (구조 참고)"
+      ],
+      "source_card_ids": [
+        "S00169",
+        "S00171"
+      ],
+      "target_card_id": "S00169",
+      "competitor_card_id": "S00171",
+      "target_fields": [
+        "company",
+        "email"
+      ],
+      "answerable": true,
+      "notes": "두 실제 명함 인물이 차례로 등장한 뒤 단순 최신 focus가 아닌 비최신 인물을 '첫 번째/처음'과 같은 담화 표현으로 다시 지칭했을 때 올바른 인물을 해석하는지 평가",
+      "turns": [
+        {
+          "user": "함태민씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손준우씨 회사가 어디야?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "손준우씨 주소는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "두 사람 중 먼저 물어본 사람 회사와 이메일도 알려줘",
+          "evaluate": true,
+          "expected_contains": [
+            "유한회사 아토믹푸드",
+            "taeminham@atomikpudeu.com"
+          ],
+          "expected_contains_any": [],
+          "forbidden_contains": [
+            "(주)스마트인프라",
+            "junuson@seumateuinpeura.com"
+          ],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 3,
+          "requested_fields": [
+            "company",
+            "email"
+          ],
+          "gold_answer_values": {
+            "company": "유한회사 아토믹푸드",
+            "email": "taeminham@atomikpudeu.com"
+          },
+          "answerable": true
+        }
+      ]
+    },
+    {
+      "id": "ua_01",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S02765"
+      ],
+      "target_card_id": "S02765",
+      "missing_field": "email",
+      "target_fields": [],
+      "notes": "실제 카드 S02765의 email 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "음혜린씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 이메일은?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [
+            "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+          ],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "email"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_02",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S03558"
+      ],
+      "target_card_id": "S03558",
+      "missing_field": "email",
+      "target_fields": [],
+      "notes": "실제 카드 S03558의 email 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "추하늘씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "회사는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 이메일은?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [
+            "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+          ],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "email"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_03",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "T010"
+      ],
+      "target_card_id": "T010",
+      "missing_field": "department",
+      "target_fields": [],
+      "notes": "실제 카드 T010의 department 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "여은정씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "회사는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 부서는?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "department"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_04",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "T013"
+      ],
+      "target_card_id": "T013",
+      "missing_field": "department",
+      "target_fields": [],
+      "notes": "실제 카드 T013의 department 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "용대현씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "회사는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 부서는?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "department"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_05",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S02995"
+      ],
+      "target_card_id": "S02995",
+      "missing_field": "address",
+      "target_fields": [],
+      "notes": "실제 카드 S02995의 address 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "염민서씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 주소는?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "address"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_06",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S02289"
+      ],
+      "target_card_id": "S02289",
+      "missing_field": "address",
+      "target_fields": [],
+      "notes": "실제 카드 S02289의 address 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "선채원씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "회사는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 주소는?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "address"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_07",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S04467"
+      ],
+      "target_card_id": "S04467",
+      "missing_field": "company",
+      "target_fields": [],
+      "notes": "실제 카드 S04467의 company 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "문은지씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사는?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "company"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_08",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S04462"
+      ],
+      "target_card_id": "S04462",
+      "missing_field": "company",
+      "target_fields": [],
+      "notes": "실제 카드 S04462의 company 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "마지원씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "직급은?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 회사는?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "company"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_09",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S03674"
+      ],
+      "target_card_id": "S03674",
+      "missing_field": "title",
+      "target_fields": [],
+      "notes": "실제 카드 S03674의 title 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "손우성씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "회사는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 직급은?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "title"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    },
+    {
+      "id": "ua_10",
+      "category": "unanswerable",
+      "benchmark_basis": [
+        "LoCoMo adversarial QA (구조 참고)",
+        "SQuAD 2.0 unanswerable QA (개념 참고)"
+      ],
+      "source_card_ids": [
+        "S04505"
+      ],
+      "target_card_id": "S04505",
+      "missing_field": "title",
+      "target_fields": [],
+      "notes": "실제 카드 S04505의 title 값이 비어 있으며, 대화 문맥을 근거로 존재하지 않는 정보를 생성하지 않고 기권하는지 평가",
+      "turns": [
+        {
+          "user": "맹영희씨 전화번호 알려줘",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "회사는?",
+          "evaluate": false,
+          "expected_contains": [],
+          "expected_contains_any": [],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "answer",
+          "context_distance": 0
+        },
+        {
+          "user": "그 사람 직급은?",
+          "evaluate": true,
+          "expected_contains": [],
+          "expected_contains_any": [
+            "정보가 없",
+            "알 수 없",
+            "확인할 수 없",
+            "제공되지",
+            "등록되어 있지",
+            "등록되지",
+            "찾지 못했",
+            "찾을 수 없",
+            "없는 정보",
+            "없어요",
+            "모르"
+          ],
+          "forbidden_contains": [],
+          "forbidden_patterns": [],
+          "expected_behavior": "unknown",
+          "context_distance": 2,
+          "requested_fields": [
+            "title"
+          ],
+          "gold_answer_values": {},
+          "answerable": false
+        }
+      ],
+      "answerable": false
+    }
+  ]
+}

@@ -1808,7 +1808,15 @@ internal fun applyNarrowing(question: String, previousTerms: String?): String {
     return "$previousTerms $question"
 }
 
-private fun resolveSearchQuery(question: String, focusPerson: String?): String {
+/**
+ * 속성 명사 앞에 흔히 붙는 군말. 이걸 떼고도 속성으로 시작하면 생략형 후속이다
+ * ("어느 부서야?", "그럼 주소는?"). 지시 관형사(그/이/저)는 넣지 않는다 —
+ * 그건 [FOLLOWUP_PRONOUNS] 가 이미 담당하므로 중복이다.
+ */
+private val ELLIPSIS_LEAD_FILLERS =
+    listOf("어느", "어떤", "그럼", "그러면", "근데", "그리고", "혹시", "이제", "또")
+
+internal fun resolveSearchQuery(question: String, focusPerson: String?): String {
     if (focusPerson == null) return question
     val hasPronoun = FOLLOWUP_PRONOUNS.any { question.contains(it) }
     // 질문에 '새 검색값'(전화번호 뒷자리 등)이 있으면 생략형 후속으로 보지 않는다 —
@@ -1819,7 +1827,17 @@ private fun resolveSearchQuery(question: String, focusPerson: String?): String {
     // '조건에 해당하는 명함을 찾지 못했습니다', focus 도 딴 사람으로 튐).
     // '4자리' 같은 자릿수 표현과 '4312' 같은 검색값은 자릿수 길이로 가른다.
     val hasNewValue = Regex("\\d{3,}").containsMatchIn(question)
-    val isElliptical = !hasNewValue && ATTRIBUTE_NOUNS.any { question.trimStart().startsWith(it) }
+    // 속성 명사 **앞에 붙는 군말**을 떼고도 본다. startsWith 만 보면 "부서는?"은 되는데
+    // "어느 부서야?"는 새 검색으로 빠져 focus 가 엉뚱한 사람으로 튄다 — 그 한 턴이
+    // 오염시키면 **뒤 턴이 연쇄로 무너진다**(실측: 평가 발화를 다양화하자 실패 2건 -> 32건,
+    // 대부분이 이 한 가지 말투에서 시작된 연쇄였다. 고친 뒤 다시 2건).
+    val trimmed = question.trimStart()
+    val withoutFiller = ELLIPSIS_LEAD_FILLERS
+        .firstOrNull { trimmed.startsWith(it) }
+        ?.let { trimmed.removePrefix(it).trimStart() }
+        ?: trimmed
+    val isElliptical = !hasNewValue &&
+        ATTRIBUTE_NOUNS.any { trimmed.startsWith(it) || withoutFiller.startsWith(it) }
     // 대명사도 없고 속성 명사로 시작하지도 않으면 새 인물/독립 질문 — 그대로 둔다.
     if (!hasPronoun && !isElliptical) return question
     var q = question
