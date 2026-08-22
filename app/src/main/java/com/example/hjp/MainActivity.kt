@@ -1687,6 +1687,11 @@ internal fun attributeOf(question: String): String? =
  * ('이름'은 비는 일이 없어 뺀다.)
  */
 private val ATTRIBUTE_FIELD = mapOf(
+    // 복합어를 **먼저** 등록한다. "메일 주소는?" 은 이메일 하나를 묻는 말이지
+    // 이메일과 주소를 함께 묻는 말이 아니다(실측: 두 칸으로 읽혀 주소까지 답했다).
+    "이메일 주소" to "email", "메일 주소" to "email",
+    "이메일주소" to "email", "메일주소" to "email",
+    "회사 주소" to "address", "회사주소" to "address",
     "전화번호" to "phone", "전화" to "phone", "번호" to "phone", "연락처" to "phone",
     "핸드폰" to "phone", "휴대폰" to "phone",
     "메일" to "email", "이메일" to "email",
@@ -1735,11 +1740,16 @@ private fun requestedPos(question: String, noun: String): Int {
  */
 internal fun requestedFields(question: String): List<Pair<String, String>> {
     val found = mutableListOf<Triple<Int, String, String>>()
+    val taken = mutableListOf<IntRange>()   // 이미 어떤 명사가 차지한 글자 구간
     for (noun in ATTRIBUTE_FIELD.keys.sortedByDescending { it.length }) {
         val field = ATTRIBUTE_FIELD.getValue(noun)
         if (found.any { it.second == field }) continue
         val pos = requestedPos(question, noun)
-        if (pos >= 0) found.add(Triple(pos, field, noun))
+        if (pos < 0) continue
+        // 앞서 잡힌 명사 안에 들어 있으면 같은 말을 두 번 세는 것이다.
+        if (taken.any { pos in it }) continue
+        taken.add(pos until pos + noun.length)
+        found.add(Triple(pos, field, noun))
     }
     return found.sortedBy { it.first }.map { it.second to it.third }
 }

@@ -831,6 +831,10 @@ def attribute_of(question: str):
 # 속성 명사 -> 카드 필드. 물어본 칸이 실제로 비어 있으면 LLM 을 부르지 않는다.
 # ('이름'은 비는 일이 없어 뺀다.)
 ATTRIBUTE_FIELD = {
+    # 복합어를 **먼저** 등록한다. "메일 주소는?" 은 이메일 하나를 묻는 말이지
+    # 이메일과 주소를 함께 묻는 말이 아니다(실측: 두 칸으로 읽혀 주소까지 답했다).
+    "이메일 주소": "email", "메일 주소": "email", "이메일주소": "email", "메일주소": "email",
+    "회사 주소": "address", "회사주소": "address",
     "전화번호": "phone", "전화": "phone", "번호": "phone", "연락처": "phone",
     "핸드폰": "phone", "휴대폰": "phone",
     "메일": "email", "이메일": "email",
@@ -866,15 +870,21 @@ def requested_fields(question: str):
     '전화번호'가 '전화'·'번호'를 품는 식으로 명사가 겹치므로 필드로 중복을 없앤다.
     """
     found = []
-    # **긴 명사부터** 본다 — "이메일" 안의 "메일", "전화번호" 안의 "전화"가 먼저 잡히면
-    # 라벨이 짧게 잘려 나온다("메일: ..."). 둘 다 같은 필드라 먼저 잡은 쪽이 이긴다.
+    taken = []  # 이미 어떤 명사가 차지한 글자 구간
+    # **긴 명사부터** 본다 — "이메일" 안의 "메일", "메일 주소" 안의 "주소"가 먼저 잡히면
+    # 라벨이 잘리거나 한 요청이 두 칸으로 쪼개진다.
     for noun in sorted(ATTRIBUTE_FIELD, key=len, reverse=True):
         field = ATTRIBUTE_FIELD[noun]
         if any(f == field for _, f, _ in found):
             continue
         pos = _requested_pos(question, noun)
-        if pos >= 0:
-            found.append((pos, field, noun))
+        if pos < 0:
+            continue
+        # 앞서 잡힌 명사 안에 들어 있으면 같은 말을 두 번 세는 것이다.
+        if any(a <= pos < b for a, b in taken):
+            continue
+        taken.append((pos, pos + len(noun)))
+        found.append((pos, field, noun))
     found.sort()
     return [(f, n) for _, f, n in found]
 

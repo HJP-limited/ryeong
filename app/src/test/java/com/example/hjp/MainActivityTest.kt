@@ -610,4 +610,23 @@ class MainActivityTest {
             assertEquals(it, resolveSearchQuery(it, "김서영"))
         }
     }
+
+    @Test
+    fun `복합어를 두 칸으로 쪼개지 않는다`() {
+        // "메일 주소는?" 은 이메일 하나를 묻는 말이다. 두 칸으로 읽으면 주소까지 답한다
+        // (실측: 평가 발화를 다양화하면서 이 오작동이 드러났다).
+        assertEquals(listOf("메일 주소"), requestedFields("메일 주소는?").map { it.second })
+        assertEquals(listOf("이메일 주소"), requestedFields("이메일 주소 알려줘").map { it.second })
+        assertEquals(listOf("회사 주소"), requestedFields("회사 주소는?").map { it.second })
+        // 한 칸이므로 여러 칸 우회는 안 걸리고 LLM 이 문장으로 답한다.
+        assertNull(fieldListAnswer("메일 주소는?", listOf(cardOf(email = "a@b.kr", address = "서울"))))
+    }
+
+    @Test
+    fun `진짜로 두 칸을 물으면 그대로 두 칸이다`() {
+        assertEquals(listOf("회사", "이메일"),
+            requestedFields("회사와 이메일도 알려줘").map { it.second })
+        assertEquals(listOf("전화번호", "이메일"),
+            requestedFields("전화번호랑 이메일 알려줘").map { it.second })
+    }
 }
