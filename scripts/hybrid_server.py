@@ -1347,6 +1347,7 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
 
     if (is_conversational_followup(question) or ordinal_idx is not None) and selected_ids:
         top_ids = selected_ids[:TOP_N]
+        prompt_ids = list(top_ids)  # faithfulness 채점용(위 메인 경로와 같은 이유)
         t = time.time()
         try:
             answer = (field_list_answer(question, top_ids)
@@ -1386,6 +1387,10 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
             "card_ids": top_ids,
             "conversation_memory": memory,
             "history": recent,
+            "context_cards": [
+                {k: (CARDS_BY_ID[cid].get(k) or "") for k in ("name", "company", "title", "department", "phone", "email", "address", "location")}
+                for cid in prompt_ids
+            ],
             "cards": [
                 {k: (CARDS_BY_ID[cid].get(k) or "") for k in ("name", "company", "title", "department", "phone", "email", "address", "location")}
                 for cid in top_ids
@@ -1440,6 +1445,9 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
     if abstained:
         hy = []
     top_ids = hy[:TOP_N]
+    # faithfulness 채점용 — LLM 이 **실제로 본** 카드. narrow_by_answer 가 top_ids 를
+    # 깎기 전에 잡아 둔다. 답변이 narrow 로 지워진 카드 값을 썼어도 그건 컨텍스트 안이다.
+    prompt_ids = list(top_ids)
 
     # 조건이 명확하면(가제티어가 아는 지역/직함/이름/부서) 전체를 직접 세서 진짜 개수를 준다.
     # 안 그러면 모델이 후보 개수(최대 5)를 전체인 양 답한다.
@@ -1609,6 +1617,10 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
         "identifier_routed": ev.is_identifier_query(rq),
         "filtered_out": filtered_out,
         "field_filters": field_filters,
+        "context_cards": [
+            {k: (CARDS_BY_ID[cid].get(k) or "") for k in ("name", "company", "title", "department", "phone", "email", "address", "location")}
+            for cid in prompt_ids
+        ],
         # 조건에 맞는 전체 인원(셀 수 있을 때만). 화면에는 top-5 만 뜨므로
         # "전체 N명 중 5명 표시" 로 구분해서 보여주기 위한 값이다.
         "total_matches": total_matches,

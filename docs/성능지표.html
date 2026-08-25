@@ -178,9 +178,9 @@
 
   <!-- ============ 최종 채택 ============ -->
   <section style="margin-top:2.5rem">
-    <h2>최종 채택 — 10개</h2>
+    <h2>최종 채택 — 12개</h2>
     <p class="sub">
-      계산하는 지표는 더 많지만 <b>발표에 쓰는 건 이 10개</b>다. 나머지는 회귀가 났을 때
+      계산하는 지표는 더 많지만 <b>발표에 쓰는 건 이 12개</b>다. 나머지는 회귀가 났을 때
       원인을 분해하는 진단용이라 헤드라인에 올리지 않는다.
     </p>
 
@@ -209,7 +209,7 @@
       </table>
     </div>
 
-    <h3>멀티턴 — 3개 <span class="src">scripts/eval_multiturn.py · 시나리오 139 / 턴 386</span></h3>
+    <h3>멀티턴 — 5개 <span class="src">scripts/eval_multiturn.py · 시나리오 139 / 턴 386</span></h3>
     <div class="scroll adopt">
       <table>
         <thead><tr><th>지표</th><th>값</th><th>무엇을 재나</th><th>근거 — 어떻게 쟀나</th></tr></thead>
@@ -222,7 +222,7 @@
               <td><b>회귀가 없나</b></td>
               <td>천장이라 '좋다'가 아니라 <b>'안 나빠졌다'</b>. 결함 6개를 고치는 동안
                   386턴이 한 번도 안 깨졌다는 근거다</td></tr>
-          <tr><td>커버리지</td><td class="num">139 / 386 / 124</td>
+          <tr><td>커버리지</td><td class="num">139 / 386 / 123</td>
               <td>얼마나 넓게 봤나</td>
               <td>시나리오 / 턴 / <b>서로 다른 발화 '틀'</b>. 분모만 보고하면 같은 시험을
                   이름만 바꿔 반복한 걸 숨기게 된다</td></tr>
@@ -499,20 +499,87 @@
     </div>
 
     <div class="metric">
-      <div class="val">124<small>서로 다른 발화 '틀'</small></div>
+      <div class="val">123<small>서로 다른 발화 '틀'</small></div>
       <div>
         <p class="name">턴 수가 아니라 덮는 범위 <span class="tag ok">측정</span></p>
         <p>유형당 표현이 1개면 분모만 크고 실제로 재는 행동은 좁다. <b>턴 수는 386 그대로</b> 두고
         표현 풀에서 골라 쓰게 바꿨다.</p>
-        <p class="prov">틀 93 → 124 · 시나리오 구조 71 → 114 · 상위 10틀 비중 69% → 39%</p>
+        <p class="prov">틀 93 → 123 · 시나리오 구조 71 → 113 · 상위 10틀 비중 69% → 39%</p>
         <p class="why">바꾸자마자 <b>실패가 2건 → 32건</b>으로 튀었다. 숫자가 나빠진 게 아니라
         원래 있던 결함이 드러난 것이다(아래 참조). 고친 뒤 다시 2건.
         <b><code>361/361</code>처럼 분모만 보고하지 말 것</b> — 구조 N종 / 틀 M종을 같이 적는다.</p>
       </div>
     </div>
 
+    <h3>답변 품질 2종 — Faithfulness / Answer Relevancy <span class="tag ok">멀티턴 전용</span></h3>
+    <p style="font-size:.9rem;color:var(--ink-2);margin:0 0 .9rem">
+      검색 지표와 <b>섞지 않는다</b> — 검색은 LLM을 부르지 않으므로 잴 수도 없고 재서도 안 된다.
+      검색은 '가져오기'를, 이 둘은 '가져온 것으로 무엇을 했나'를 잰다. 둘 다 <b>LLM이 실제로
+      답을 만든 턴</b>에만 매긴다(체크리스트와 같은 범위).
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th></th><th>표준 정의 (RAGAS, Es et al. 2023)</th><th>표준 구현</th><th>우리 적응</th></tr></thead>
+        <tbody>
+          <tr><td><b>Faithfulness</b></td>
+              <td>답변의 주장 중 컨텍스트가 뒷받침하는 비율</td>
+              <td>LLM이 주장을 쪼개고, LLM이 각 주장을 컨텍스트와 대조</td>
+              <td>답변이 <b>필드 값 모양</b>이라 주장 = 필드 값. 전화·이메일은 정규식, 회사·부서·주소는 1000장에 실재하는 값으로 뽑고,
+                  <b>그 턴의 프롬프트에 들어간 카드</b>(<code>context_cards</code>, narrow 전) 안에 있으면 근거 있음</td></tr>
+          <tr><td><b>Answer Relevancy</b></td>
+              <td>답변이 질문에 부합하는가. 불완전·딴소리면 낮음</td>
+              <td>LLM이 답변에서 질문 N개를 역생성, 원 질문과 코사인 유사도 평균</td>
+              <td>질문은 '누구의 어떤 속성'. 요청 필드마다 <b>그 유형의 값</b>이 답변에 있나 — 출처는 묻지 않는다.
+                  속성 없는 질문은 컨텍스트 인물을 언급했나. 정답이 있는데 거절하면 0</td></tr>
+        </tbody>
+        <caption><b>왜 판정자 모델 없이 재도 되나.</b> RAGAS 논문도 주장 분해가 가장 불안정한 단계라고 적는다.
+        우리 답변("데이터플랫폼팀입니다", "010-3000-6000")은 분해가 필요 없을 만큼 정형이라 결정적으로 쪼갤 수 있다 —
+        재현 가능하고 판정자 편차가 없다.</caption>
+      </table>
+    </div>
+
+    <h3>세 층은 서로 다른 것을 잰다</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>층</th><th>묻는 것</th><th>회사 물었는데 주소 답함</th><th>남의 회사 답함</th><th>날조 번호</th></tr></thead>
+        <tbody>
+          <tr><td>Answer Relevancy</td><td>맞는 <b>종류</b>인가</td><td class="num weak">0</td><td class="num good">1</td><td class="num good">1</td></tr>
+          <tr><td>Faithfulness</td><td><b>컨텍스트에서</b> 왔나</td><td class="num good">1</td><td class="num weak">0</td><td class="num weak">0</td></tr>
+          <tr><td>체크리스트</td><td>맞는 <b>값</b>인가 (정답 카드)</td><td class="num weak">0</td><td class="num weak">0</td><td class="num weak">0</td></tr>
+        </tbody>
+        <caption>처음엔 관련성을 "컨텍스트 안의 값"으로 쟀다가 충실성과 겹쳐서 고쳤다. 관련성은 <b>유형만</b> 봐야 분리된다.
+        합성 사례 7개로 경계를 확인했다(전부 기대와 일치).</caption>
+      </table>
+    </div>
+
+    <div class="note gapn">
+      <p><strong>한계.</strong> 데이터에 없는 회사명을 지어내면 못 잡는다(색인이 없어서). 전화·이메일 날조는 정규식으로 잡힌다.
+      직함·이름은 2~3자라 부분 일치 오탐이 커서 충실성 주장으로 세지 않는다. 컨텍스트 = 그 턴의 카드이고 대화 이력은
+      포함하지 않는다 — 이력에는 있지만 이번 카드에 없는 값을 쓰면 근거 없음으로 본다. <b>그게 바로 "옛 인물 값" 실패 모드다.</b></p>
+      <p><strong>재현.</strong> <code>--dump</code>로 턴별 (질문·답변·컨텍스트 카드·정답)을 JSONL로 남긴다. 채점 기준을 바꿔도
+      <b>생성 없이</b> 다시 잰다 — 생성(75분)과 채점(초)을 분리한다.</p>
+    </div>
+
+    <h3>측정 결과 — 386턴 덤프, LLM 턴 349개</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>지표</th><th>값</th><th>분모</th><th>첫 채점 → 채점기 수정 후</th></tr></thead>
+        <tbody>
+          <tr><td>Answer Relevancy</td><td class="num good">0.952</td><td>314/330 요청 필드 (정답 카드 있는 턴만)</td><td class="num">0.793 → 0.952</td></tr>
+          <tr><td>Faithfulness</td><td class="num good">1.000</td><td>272/272 주장 · 233턴</td><td class="num">0.886 → 1.000</td></tr>
+          <tr><td>연락처 날조 없음</td><td class="num good">1.000</td><td>349/349</td><td class="num">1.000</td></tr>
+          <tr><td>체크리스트 (LLM 턴)</td><td class="num">0.945</td><td>273/289</td><td class="num">발화 다양화 전 0.990</td></tr>
+        </tbody>
+        <caption><b>채점기를 먼저 의심했다.</b> 첫 실행 실패 121건 중 <b>105건이 채점기 오탐</b>이었다 — 긴 값 안의 짧은 값, 번지 접두 매치,
+        같은 핵심어의 다른 카드로 정규화, 2글자 직함 누락, 속성 생략 후속 오분류, 정답 없는 턴에 관련성 부여.
+        <code>--dump</code> 덕에 재생성 없이 네 번 고쳐 다시 쟀다(각 3초). 오른쪽 열의 상승은 모델이 아니라 자가 고쳐진 것이다.
+        남은 16건은 전부 실제 결함: 직장/어디 다녀 5 · {n}씨도?/어때? 5 · 복수 후속 이름만 4 · 부서→총1명 2.</caption>
+      </table>
+    </div>
+
     <div class="note">
-      <p><strong>아래 두 값은 오늘 수정 이전에 잰 것이다.</strong> 생성 채점(<code>--generate</code>,
+      <p><strong>pass^3 만 아직 발화 다양화 이전 값이다</strong>(표본 18, 1.000). 나머지는 위 전량 값으로 갱신됐다.</p>
+      <p style="display:none"><strong>아래 두 값은 오늘 수정 이전에 잰 것이다.</strong> 생성 채점(<code>--generate</code>,
       약 75분)을 그 뒤로 다시 돌리지 않았다. 특히 무관 요청 억제는 오늘 넣은 기능 안내 우회가
       바로 그 실패 1건을 겨냥한 것이라 <b>개선됐을 가능성이 높지만 확인 전이다.</b></p>
       <p>체크리스트(LLM 턴) <b>0.990</b> (286/289) · 무관 요청 카드 억제 <b>0.900</b> (9/10) ·

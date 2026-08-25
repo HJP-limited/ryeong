@@ -1,4 +1,4 @@
-"""멀티턴 평가 — 라우팅 / JGA(슬롯) / 턴별 Hit@5·R@5·MRR / 체크리스트 통과율 / pass^k.
+"""멀티턴 평가 — 라우팅 / JGA(슬롯) / 턴별 Hit@5·R@5·MRR / 체크리스트 / Relevancy·Faithfulness / pass^k.
 
 왜 이 지표들인가
 ----------------
@@ -133,7 +133,10 @@ def turn(q, route=None, slots=None, gold=None, must=None, must_not=None, no_card
 # rng 로 고르므로 seed 가 같으면 재현된다.
 ASK_COMPANY = [
     "{n}씨 회사가 어디야?", "{n}씨 어디 다녀?", "{n}씨 직장이 어디지?",
-    "{n}씨 회사 알려줘", "{n}씨 소속이 어디야?", "{n}씨 어느 회사 다녀?",
+    # "{n}씨 소속이 어디야?" 는 뺐다 — '소속'은 회사로도 부서로도 읽혀 정답이 하나로 정해지지
+    # 않는다(실측: 모델이 QA팀·경영기획실·R&D센터를 답했고, 그걸 틀렸다고 할 근거가 없다).
+    # 모호한 항목은 모델 결함이 아니라 시험 설계 결함이다.
+    "{n}씨 회사 알려줘", "{n}씨 어느 회사 다녀?",
 ]
 ASK_DEPARTMENT_NAMED = [
     "{n}씨 부서는?", "{n}씨 어느 부서야?", "{n}씨 부서 알려줘", "{n}씨 소속 부서가 뭐야?",
@@ -166,6 +169,325 @@ SEARCH_LOC_TITLE = [
 def pick(rng, pool, **kw):
     """표현 풀에서 하나 고른다. seed 가 같으면 같은 것이 나온다."""
     return rng.choice(pool).format(**kw)
+
+
+# ---------------------------------------------------------------------------
+# 날조 값 검사 — 답변에 **어느 카드에도 없는** 연락처가 나오는지 본다.
+#
+# 고정셋의 forbidden_contains 는 '그 대화에 나온 다른 사람 값'을 **수작업으로 열거**한
+# 것이라, 목록에 없는 값이나 완전히 지어낸 값은 못 잡는다.
+#   정답 손다은 / 금지 [같은 대화 4명의 번호] / 답변 "010-7777-8888" -> 통과해 버린다
+# 이건 규칙 하나로 전 구간을 덮는다 — 작성자가 무엇을 떠올렸는지에 의존하지 않는다.
+#
+# 전화·이메일만 본다. 정확 문자열이라 **오탐이 0**이다: 1000장 어디에도 없는 번호가
+# 답변에 있으면 모델이 지어낸 것 말고 설명이 없다. 회사·부서명은 표기 흔들림이 있어 뺐다.
+# (이 앱에서 가장 위험한 거짓말이기도 하다 — 없는 번호로 전화를 걸게 된다.)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_PHONE_RE = re.compile(r"\d[\d\-\s]{8,}\d")
+
+
+def build_contact_index(cards):
+    """데이터에 실재하는 연락처 집합. 전화는 숫자만 남겨 표기 차이를 없앤다."""
+    emails, phones = set(), set()
+    for c in cards:
+        e = (c.get("email") or "").strip().lower()
+        if e:
+            emails.add(e)
+        digits = re.sub(r"\D", "", c.get("phone") or "")
+        if len(digits) >= 9:
+            phones.add(digits)
+    return emails, phones
+
+
+def fabricated_contacts(answer, emails, phones):
+    """답변에서 뽑은 연락처 중 데이터에 없는 것들."""
+    out = []
+    for m in _EMAIL_RE.findall(answer or ""):
+        if m.strip().lower() not in emails:
+            out.append(m)
+    for m in _PHONE_RE.findall(answer or ""):
+        digits = re.sub(r"\D", "", m)
+        # 뒷자리만 답하는 정상 응답("뒤 4자리는 4312")을 날조로 보지 않는다.
+        if len(digits) < 9:
+            continue
+        if digits not in phones and not any(digits in p for p in phones):
+            out.append(m.strip())
+    return out
+
+# ---------------------------------------------------------------------------
+# 답변 품질 2종 — Faithfulness / Answer Relevancy (RAGAS, Es et al. 2023 의 정의를 따른다)
+#
+# 둘 다 **LLM 이 실제로 답을 만든 턴**에만 매긴다(체크리스트와 같은 범위). 검색 지표와는
+# 완전히 별개다 — 검색은 '가져오기'를 재고, 이 둘은 '가져온 것으로 무엇을 했나'를 잰다.
+#
+# ── Faithfulness ────────────────────────────────────────────────────────────
+#   표준 정의:  F = |컨텍스트가 뒷받침하는 주장| / |답변의 주장 전체|
+#   표준 구현:  LLM 이 답변을 주장 단위로 쪼개고, LLM 이 각 주장을 컨텍스트와 대조한다.
+#   우리 적응:  답변이 **필드 값 모양**("데이터플랫폼팀입니다", "010-3000-6000")이라
+#              주장 = 필드 값이다. 그래서 쪼개기도 대조도 **결정적**으로 한다.
+#     · 주장 추출: 전화·이메일은 정규식 / 회사·부서·주소는 1000장 데이터에 실재하는
+#                값이 답변에 나타나는지로 잡는다(직함·이름은 2~3자라 부분 일치 오탐이
+#                커서 제외 — 아래 '한계').
+#     · 근거 판정: 그 값이 **그 턴의 프롬프트에 들어간 카드**(context_cards, narrow 전)
+#                안에 있으면 근거 있음. 대화 이력에는 있지만 이번 카드에 없으면 근거 없음
+#                — 그게 바로 "옛 인물 값을 답하는" 실패 모드다.
+#   왜 타당한가: RAGAS 논문도 주장 분해가 가장 불안정한 단계라고 적는다. 우리 답변은
+#              분해가 필요 없을 만큼 짧고 정형이라, 판정자 모델 없이 재현 가능하게 잰다.
+#   한계:      데이터에 없는 회사명을 지어내면 못 잡는다(색인이 없으므로). 전화·이메일
+#              날조는 정규식으로 잡힌다. 직함·이름은 주장으로 세지 않는다.
+#
+# ── Answer Relevancy ────────────────────────────────────────────────────────
+#   표준 정의:  답변이 질문에 얼마나 부합하는가. 불완전하거나 딴소리면 낮다.
+#   표준 구현:  LLM 이 답변에서 질문 N개를 역생성하고 원 질문과의 코사인 유사도 평균.
+#   우리 적응:  우리 질문은 '누구의 어떤 속성'이다. 물은 속성 **유형**의 값을 답했으면 부합.
+#     · 속성을 물었으면:  요청 필드마다 **그 유형의 값**(전화·이메일은 정규식, 회사·부서·
+#                       주소·직함은 데이터에 실재하는 값)이 답변에 있나. 점수 = |답한 필드| / |요청 필드|
+#                       컨텍스트 안인지는 **보지 않는다** — 그건 충실성의 몫이다. 남의 회사를
+#                       답하면 관련성 1 · 충실성 0, 날조 번호면 관련성 1 · 충실성 0 으로 갈려야
+#                       세 층이 서로 다른 것을 잰다(처음엔 컨텍스트로 쟀다가 둘이 겹쳐서 고쳤다).
+#     · 속성 없는 질문(누구 찾기): 컨텍스트 카드 이름이 하나라도 답변에 있나.
+#     · 정답이 있는데 거절 문구로 답하면 0(질문을 다루지 않았다).
+#   체크리스트와의 차이: 체크리스트는 **정답 카드의 값**이 있나(맞는 값), 관련성은
+#              **요청한 유형**의 값이 있나(맞는 종류)다. "회사 물었는데 주소 답함"은
+#              관련성 0 · 충실성 1 · 체크리스트 0 으로 갈린다 — 이 분해가 진단 가치다.
+#
+# 세 층을 함께 읽는다:  관련성(맞는 종류?) → 충실성(컨텍스트에서?) → 체크리스트(맞는 값?)
+# ---------------------------------------------------------------------------
+ATTRIBUTE_FIELD = {  # hybrid_server.ATTRIBUTE_FIELD 와 같게 유지할 것
+    "이메일 주소": "email", "메일 주소": "email", "이메일주소": "email", "메일주소": "email",
+    "회사 주소": "address", "회사주소": "address",
+    "전화번호": "phone", "전화": "phone", "번호": "phone", "연락처": "phone",
+    "핸드폰": "phone", "휴대폰": "phone",
+    "메일": "email", "이메일": "email",
+    "직급": "title", "직함": "title", "직책": "title",
+    "회사": "company", "직장": "company",
+    "소속": "company|department",  # 모호어 — 관련성 판정에서 둘 다 인정한다
+    # 명사 없이 회사를 묻는 말투. 실측: 이게 없으면 "어디 다녀?" 가 '누구 찾기'로 분류돼
+    # 이름만 답한 실패(오늘 19건 중 다수)를 관련성 만점으로 통과시켰다.
+    "어디 다녀": "company", "어디 다니": "company", "어디서 일": "company", "어디 근무": "company",
+    "주소": "address", "위치": "address", "지역": "location",
+    "부서": "department",
+}
+_DEMONSTRATIVES = ("그", "이", "저")
+
+
+def requested_fields(question):
+    """질문이 물은 필드들(말한 순서). 지시 관형사 뒤의 명사("그 회사 주소")는 요청이 아니다."""
+    found, taken = [], []
+    for noun in sorted(ATTRIBUTE_FIELD, key=len, reverse=True):
+        field = ATTRIBUTE_FIELD[noun]
+        if any(f == field for _, f in found):
+            continue
+        start = 0
+        while True:
+            pos = question.find(noun, start)
+            if pos < 0:
+                break
+            before = question[:pos].rstrip()
+            if before.endswith(_DEMONSTRATIVES) or any(a <= pos < b for a, b in taken):
+                start = pos + 1
+                continue
+            taken.append((pos, pos + len(noun)))
+            found.append((pos, field))
+            break
+    return [f for _, f in sorted(found)]
+
+
+def _field_variants(field, value):
+    """답변에 나타날 수 있는 표기들. 회사는 '주식회사'를 뗀 형태, 주소는 도로명+번지도 인정."""
+    if not value:
+        return []
+    if field == "company":
+        return [v for v in company_variants(value) if len(v) >= 3]
+    if field == "address":
+        return address_variants(value)
+    if field == "phone":
+        digits = re.sub(r"\D", "", value)
+        return [value, digits, digits[-4:]] if len(digits) >= 9 else [value]
+    return [value] if len(value) >= 2 else []
+
+
+def build_value_index(cards):
+    """faithfulness 주장 추출용 — 데이터에 실재하는 회사·부서·주소 값(정규화 표기 포함)."""
+    # title 은 관련성(유형 판정)에만 쓴다. 충실성 주장으로는 세지 않는다(2~3자 부분 일치 오탐).
+    idx = {"company": {}, "department": {}, "address": {}, "title": {}}
+    for c in cards:
+        for field in idx:
+            v = (c.get(field) or "").strip()
+            for variant in _field_variants(field, v):
+                # 직함은 2글자가 대부분(차장·과장·팀장·수석). 3글자 컷을 두면 "직함이 뭐야?" ->
+                # "차장" 이 관련성 0 으로 찍힌다(실측 오탐). 다른 필드는 3글자 미만이면 오탐이 커진다.
+                if len(variant) >= (2 if field == "title" else 3):
+                    idx[field].setdefault(variant, v)
+    return idx
+
+
+def faithfulness(answer, context_cards, value_index):
+    """(근거 있는 주장 수, 전체 주장 수, 근거 없는 주장 목록). 주장이 없으면 (0, 0, [])."""
+    answer = answer or ""
+    claims = []  # (field, matched_text, canonical_value)
+    for m in _EMAIL_RE.findall(answer):
+        claims.append(("email", m.strip().lower(), m.strip().lower()))
+    for m in _PHONE_RE.findall(answer):
+        digits = re.sub(r"\D", "", m)
+        if len(digits) >= 9:
+            claims.append(("phone", digits, digits))
+    claims += _extract_value_claims(answer, value_index)
+
+    def supported(field, matched, canonical):
+        for card in context_cards or []:
+            cv = (card.get(field) or "").strip()
+            if not cv:
+                continue
+            if field == "email" and cv.lower() == matched:
+                return True
+            if field == "phone" and re.sub(r"\D", "", cv) == matched:
+                return True
+            # 정규형이 같거나, 답변에 나온 표기가 이 카드 값의 표기 변형 중 하나면 근거 있음.
+            # 정규형만 비교하면 같은 핵심어를 가진 **다른 카드**로 정규화된 주장이 오탐된다
+            # (실측: '노블엔지니어링' 이 '유한회사 노블엔지니어링' 카드로 잡혀 근거 없음 처리).
+            if field in ("company", "department", "address") and (
+                cv == canonical or matched in _field_variants(field, cv)
+            ):
+                return True
+        return False
+
+    ok = [c for c in claims if supported(*c)]
+    bad = [f"{f}:{m}" for f, m, _ in claims if (f, m, _) not in ok]
+    return len(ok), len(claims), bad
+
+
+def _extract_value_claims(answer, value_index):
+    """
+    답변에서 회사·부서·주소 주장을 뽑는다 — **최장 일치 우선, 구간 소진.**
+
+    단순 부분 문자열로 뽑으면 오탐이 셋 생긴다(전부 실측):
+      · 긴 값 안의 짧은 값: '프로덕트디자인팀' 안의 '디자인팀' 이 별도 주장으로 잡힘
+      · 같은 핵심어의 다른 카드: '유한회사 넥스트푸드' 답변에서 '넥스트푸드' 카드로 정규화됨
+      · 번지 접두: '우암로 1' 이 '우암로 144' 에 매치
+    긴 매치를 먼저 잡고 그 글자 구간을 소진하면 앞의 둘이 사라지고, 주소는 번지 뒤에
+    숫자가 이어지면 매치로 보지 않아 셋째가 사라진다.
+    """
+    cands = []
+    for field in ("company", "department", "address"):
+        for variant, canonical in value_index[field].items():
+            start = 0
+            while True:
+                pos = answer.find(variant, start)
+                if pos < 0:
+                    break
+                end = pos + len(variant)
+                if field == "address" and end < len(answer) and answer[end].isdigit():
+                    start = pos + 1
+                    continue
+                cands.append((pos, end, field, variant, canonical))
+                start = pos + 1
+    cands.sort(key=lambda c: (-(c[1] - c[0]), c[0]))
+    taken, claims, seen = [], [], set()
+    for s_, e_, field, variant, canonical in cands:
+        if any(not (e_ <= ts or s_ >= te) for ts, te in taken):
+            continue
+        taken.append((s_, e_))
+        if (field, canonical) in seen:
+            continue
+        seen.add((field, canonical))
+        claims.append((field, variant, canonical))
+    return claims
+
+
+_SEARCH_INTENT = ("찾아", "알려줘", "있어", "있나", "누구", "명이야", "명인데", "명이", "몇")
+
+
+def answer_relevancy(question, answer, context_cards, gold, value_index, prev_fields=None, must=None):
+    """
+    (답한 필드 수, 요청 필드 수). None 이면 채점 제외.
+
+    prev_fields: 앞 턴이 물은 필드. "어민서씨도?" 처럼 **속성을 생략한 후속**은 질문만 봐서는
+    무엇을 물었는지 알 수 없다 — 서버가 carryOverAttribute 로 앞 턴 속성을 이어 붙이는 것과
+    같은 원리로, 채점기도 앞 턴 필드를 물려받는다(실측: 이게 없어서 회사를 맞게 답한 턴이
+    '누구 찾기'로 분류돼 관련성 0 으로 찍혔다).
+    """
+    answer = answer or ""
+    # **정답 카드가 없는 턴은 관련성이 정의되지 않는다** — 도메인 밖 질문("오늘 날씨 어때?"),
+    # 본인 진술("내 회사는 블루오션이야"), 거절이 기대되는 턴이 여기 든다. 그 턴들이 제대로
+    # 거절했는지는 '무관 요청 카드 억제'와 결정적 턴 체크리스트가 이미 잰다. 텍스트 휴리스틱
+    # (물음표·must 대조)으로 가르려다 실패해서 이 한 기준으로 바꿨다 — 진술 안의 "회사"가
+    # 요청 필드로 잡히는 식의 오탐이 사라진다.
+    if not gold:
+        return None
+    if any(r in answer for r in REJECTIONS):
+        return 0, 1  # 정답이 있는데 거절 — 질문을 다루지 않았다
+    fields = requested_fields(question)
+    if not fields and prev_fields and not any(w in question for w in _SEARCH_INTENT):
+        fields = list(prev_fields)
+    if not fields:
+        names = [c.get("name") for c in context_cards or [] if c.get("name")]
+        if not names:
+            return None
+        # '누구 찾기'에는 이름 나열도, "총 N명" 도 답이다 — 카드가 화면에 같이 뜨므로 개수만
+        # 말해도 질문을 다룬 것이다. 체크리스트가 이미 그렇게 설계돼 있어 관련성도 맞춘다.
+        ok = any(n in answer for n in names) or re.search(r"총\s*\d+\s*명", answer) is not None
+        return (1 if ok else 0), 1
+    hit = sum(1 for field in fields if _has_value_of_type(field, answer, context_cards, value_index))
+    return hit, len(fields)
+
+
+def _has_value_of_type(field, answer, context_cards, value_index):
+    """답변에 그 **유형**의 값이 있나. 출처(컨텍스트 안/밖)는 묻지 않는다."""
+    if "|" in field:
+        return any(_has_value_of_type(f, answer, context_cards, value_index) for f in field.split("|"))
+    if field == "phone":
+        return any(len(re.sub(r"\D", "", m)) >= 9 for m in _PHONE_RE.findall(answer))
+    if field == "email":
+        return bool(_EMAIL_RE.search(answer))
+    if field in value_index:
+        return any(v in answer for v in value_index[field])
+    # location 처럼 색인이 없는 필드는 컨텍스트 값으로만 본다.
+    return any(v in answer for c in context_cards or []
+               for v in _field_variants(field, (c.get(field) or "").strip()))
+
+
+def rescore_from_dump(path, cards):
+    """생성(75분)과 채점(초)을 분리한다 — 채점 기준을 고쳤을 때 답변을 다시 만들지 않는다."""
+    rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+    contacts = build_contact_index(cards)
+    vi = build_value_index(cards)
+    rel_hit = rel_n = f_ok = f_n = f_turns = f_bad = noclaim = fab_bad = llm = 0
+    fails = []
+    prev_fields, prev_key = None, None
+    for r in rows:
+        key = (r["kind"], r.get("scenario_idx"))
+        if r["depth"] == 1:
+            prev_fields = None  # 새 시나리오
+        answer = r.get("answer") or ""
+        if not answer or r.get("route") not in GENERATING_ROUTES or r.get("abstained"):
+            continue
+        llm += 1
+        ctx = r.get("context_cards") or r.get("cards") or []
+        rel = answer_relevancy(r["q"], answer, ctx, r.get("gold"), vi, prev_fields, r.get("must"))
+        prev_fields = requested_fields(r["q"]) or prev_fields
+        if rel is not None:
+            rel_hit += rel[0]; rel_n += rel[1]
+            if rel[0] < rel[1]:
+                fails.append((r["kind"], r["depth"], r["q"], f"관련성 / 답변={answer[:40]!r}"))
+        ok, n, bad = faithfulness(answer, ctx, vi)
+        if n:
+            f_ok += ok; f_n += n; f_turns += 1
+            if bad:
+                f_bad += 1
+                fails.append((r["kind"], r["depth"], r["q"], f"충실성: {bad[0]} / 답변={answer[:40]!r}"))
+        else:
+            noclaim += 1
+        if fabricated_contacts(answer, contacts[0], contacts[1]):
+            fab_bad += 1
+    print(f"\n재채점 — {path}  (LLM 턴 {llm}개, 생성 없음)")
+    print(f"  답변 관련성(Relevancy)   {rel_hit / max(rel_n, 1):.3f}  ({rel_hit}/{rel_n} 요청 필드)")
+    print(f"  답변 충실성(Faithfulness) {f_ok / max(f_n, 1):.3f}  ({f_ok}/{f_n} 주장 · 턴 {f_turns}개, "
+          f"컨텍스트 밖 값 있는 턴 {f_bad}개, 주장 0건 {noclaim}개)")
+    print(f"  연락처 날조 없음         {(llm - fab_bad) / max(llm, 1):.3f}  ({llm - fab_bad}/{llm})")
+    print(f"\n[실패 {len(fails)}건]")
+    for k, d, q, why in fails:
+        print(f"  [{k}] {d}턴  {q}\n      {why}")
 
 
 def build_scenarios(cards, rng):
@@ -540,13 +862,15 @@ def check_answer(t, answer):
     return True, ""
 
 
-def run_pass(scenarios, dry_run, stats, failures, gap_failures):
+def run_pass(scenarios, dry_run, stats, failures, gap_failures, contacts=None,
+             value_index=None, dump=None):
     """시나리오 전체를 1회 실행하고 stats 를 채운다. 시나리오별 체크리스트 통과 여부를 돌려준다."""
     scenario_pass = {}
     for idx, sc in enumerate(scenarios):
         if dry_run and sc.get("generate_only"):
             continue
         history, focus, prev_ids, memory = [], None, [], None
+        prev_fields = None  # 관련성 채점용 — 앞 턴이 물은 필드
         kind = sc["kind"]
         # 알려진 간극은 헤드라인 통계에서 빼고 따로 센다.
         st = stats["gap"] if sc.get("known_gap") else stats
@@ -563,6 +887,16 @@ def run_pass(scenarios, dry_run, stats, failures, gap_failures):
                 stats["request_error"] = stats.get("request_error", 0) + 1
                 break
             answer = res.get("answer") or ""
+
+            # 날조 검사 — 답변에 **어느 카드에도 없는** 연락처가 있으면 지어낸 것이다.
+            # 생성 모드에서만 의미가 있다(dry-run 은 답변을 만들지 않는다).
+            if contacts and not dry_run and answer:
+                bogus = fabricated_contacts(answer, contacts[0], contacts[1])
+                st["fab_n"] = st.get("fab_n", 0) + 1
+                if bogus:
+                    st["fab_bad"] = st.get("fab_bad", 0) + 1
+                    target_failures.append(
+                        (kind, depth, t["q"], f"데이터에 없는 연락처: {bogus[0]}"))
             route = res.get("route")
 
             if t["route"] is not None:
@@ -620,6 +954,38 @@ def run_pass(scenarios, dry_run, stats, failures, gap_failures):
                 rr = next((1.0 / (i + 1) for i, cid in enumerate(top5) if cid in gold), 0.0)
                 st["mrr_sum"] += rr
                 st["kind"][kind]["mrr_sum"] += rr
+
+            # 답변 품질 2종(Faithfulness / Relevancy) — LLM 이 실제로 답을 만든 턴에만.
+            if not dry_run and answer and route in GENERATING_ROUTES and not res.get("abstained"):
+                ctx = res.get("context_cards") or res.get("cards") or []
+                rel = answer_relevancy(t["q"], answer, ctx, t["gold"], value_index or {}, prev_fields, t["must"])
+                prev_fields = requested_fields(t["q"]) or prev_fields
+                if rel is not None:
+                    st["rel_hit"] += rel[0]
+                    st["rel_n"] += rel[1]
+                    if rel[0] < rel[1]:
+                        target_failures.append((kind, depth, t["q"],
+                            f"관련성: 물은 속성 유형을 안 답함 / 답변={answer[:40]!r}"))
+                if value_index:
+                    f_ok, f_n, f_bad = faithfulness(answer, ctx, value_index)
+                    if f_n:
+                        st["faith_ok"] += f_ok
+                        st["faith_n"] += f_n
+                        st["faith_turns"] += 1
+                        if f_bad:
+                            st["faith_bad_turns"] += 1
+                            target_failures.append((kind, depth, t["q"],
+                                f"충실성: 컨텍스트 밖 값 {f_bad[0]} / 답변={answer[:40]!r}"))
+                    else:
+                        st["faith_noclaim"] += 1
+            if dump is not None:
+                dump.write(json.dumps({
+                    "kind": kind, "depth": depth, "q": t["q"], "route": route, "answer": answer,
+                    "gold": t["gold"], "must": t["must"], "must_not": t["must_not"],
+                    "abstained": bool(res.get("abstained")),
+                    "context_cards": res.get("context_cards"), "cards": res.get("cards"),
+                    "focus": res.get("focus"), "field_filters": res.get("field_filters"),
+                }, ensure_ascii=False) + "\n")
 
             # 체크리스트는 생성 모드에서만, 그리고 **LLM 이 실제로 답을 만든 턴에만** 매긴다.
             if not dry_run and t["must"]:
@@ -723,6 +1089,9 @@ def new_stats():
         "route_ok": 0, "route_n": 0, "jga_ok": 0, "jga_n": 0,
         "tp": 0, "fp": 0, "fn": 0,
         "hit5_ok": 0, "hit5_n": 0, "r5_sum": 0.0, "r5_n": 0, "mrr_sum": 0.0,
+        "fab_n": 0, "fab_bad": 0,
+        "rel_hit": 0, "rel_n": 0,
+        "faith_ok": 0, "faith_n": 0, "faith_turns": 0, "faith_bad_turns": 0, "faith_noclaim": 0,
         "chk_llm_ok": 0, "chk_llm_n": 0, "nocard_ok": 0, "nocard_n": 0, "chk_det_ok": 0, "chk_det_n": 0,
         "gen_ms": [],
         "kind": defaultdict(lambda: {"route_ok": 0, "route_n": 0, "jga_ok": 0, "jga_n": 0,
@@ -735,6 +1104,10 @@ def new_stats():
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--rescore", default=None,
+                    help="--dump 로 남긴 JSONL 을 읽어 관련성·충실성·날조만 다시 잰다. 서버·생성 불필요")
+    ap.add_argument("--dump", default=None,
+                    help="턴별 (질문·답변·컨텍스트 카드·정답) 을 JSONL 로 남긴다. 생성 없이 채점 기준만 바꿔 다시 잴 수 있게")
     ap.add_argument("--generate", action="store_true",
                     help="실제로 답변을 생성해 체크리스트까지 채점한다(턴당 ~10초)")
     ap.add_argument("--sample", type=int, default=0,
@@ -752,6 +1125,12 @@ def main():
     args = ap.parse_args()
 
     cards = json.loads(CARDS_PATH.read_text(encoding="utf-8"))
+    if args.rescore:
+        rescore_from_dump(args.rescore, cards)
+        return
+    contacts = build_contact_index(cards)
+    value_index = build_value_index(cards)
+    dump_fh = open(args.dump, "w", encoding="utf-8") if args.dump else None
     # 벡터가 지금 카드와 맞는지 먼저 본다. 안 맞으면 시맨틱이 옛날 내용으로
     # 돌아 지표가 조용히 틀어진다(id 는 그대로라 다른 검사로는 안 잡힌다).
     _st, _msg = _cfp.check_stamp(CARDS_PATH.parent / _cfp.STAMP_NAME, cards)
@@ -780,7 +1159,8 @@ def main():
     always_pass = None
     t0 = time.time()
     for rep in range(args.repeat):
-        passes = run_pass(scenarios, dry_run, stats, failures, gap_failures)
+        passes = run_pass(scenarios, dry_run, stats, failures, gap_failures, contacts,
+                          value_index=value_index, dump=dump_fh)
         s = {i for i, ok in passes.items() if ok or scenarios[i].get("known_gap")}
         always_pass = s if always_pass is None else (always_pass & s)
     elapsed = time.time() - t0
@@ -833,6 +1213,19 @@ def main():
         if stats["chk_det_ok"] < stats["chk_det_n"]:
             print(f"  체크리스트(결정적 턴) {pct(stats['chk_det_ok'], stats['chk_det_n'])}"
                   f"  ({stats['chk_det_ok']}/{stats['chk_det_n']})   * 라우팅 실패의 반영")
+        if stats["rel_n"]:
+            print(f"  답변 관련성(Relevancy)  {stats['rel_hit'] / stats['rel_n']:.3f}"
+                  f"  ({stats['rel_hit']}/{stats['rel_n']} 요청 필드)   * 물은 속성 **유형**의 값을 답했나")
+        if stats["faith_n"]:
+            print(f"  답변 충실성(Faithfulness) {stats['faith_ok'] / stats['faith_n']:.3f}"
+                  f"  ({stats['faith_ok']}/{stats['faith_n']} 주장 · 턴 {stats['faith_turns']}개, "
+                  f"컨텍스트 밖 값 있는 턴 {stats['faith_bad_turns']}개)   * 값이 그 턴 카드 안에 있나")
+            if stats["faith_noclaim"]:
+                print(f"    (주장 추출 0건이라 제외한 LLM 턴 {stats['faith_noclaim']}개)")
+        if stats.get("fab_n"):
+            ok = stats["fab_n"] - stats["fab_bad"]
+            print(f"  연락처 날조 없음        {pct(ok, stats['fab_n'])}"
+                  f"  ({ok}/{stats['fab_n']})   * 답변의 전화·이메일이 1000장 안에 실재하나")
         if stats["nocard_n"]:
             print(f"  무관 요청 카드 억제      {pct(stats['nocard_ok'], stats['nocard_n'])}"
                   f"  ({stats['nocard_ok']}/{stats['nocard_n']}){power(stats['nocard_n'])}")
