@@ -19,22 +19,23 @@ public final class BusinessCard {
     public final String address;
     public final String memo;
     public final List<String> tags;
+    public final long createdAtMillis;
+    public final long updatedAtMillis;
+    public final String imagePath;
+    public final String sourceType;
+    public final boolean verified;
 
-    public BusinessCard(
-            String id,
-            String name,
-            String nameEn,
-            String company,
-            String title,
-            String department,
-            String industry,
-            String location,
-            String phone,
-            String email,
-            String address,
-            String memo,
-            List<String> tags
-    ) {
+    public BusinessCard(String id, String name, String nameEn, String company, String title,
+            String department, String industry, String location, String phone, String email,
+            String address, String memo, List<String> tags) {
+        this(id, name, nameEn, company, title, department, industry, location, phone, email,
+                address, memo, tags, 0L, 0L, "", "", false);
+    }
+
+    public BusinessCard(String id, String name, String nameEn, String company, String title,
+            String department, String industry, String location, String phone, String email,
+            String address, String memo, List<String> tags, long createdAtMillis,
+            long updatedAtMillis, String imagePath, String sourceType, boolean verified) {
         this.id = value(id);
         this.name = value(name);
         this.nameEn = value(nameEn);
@@ -48,24 +49,28 @@ public final class BusinessCard {
         this.address = value(address);
         this.memo = value(memo);
         this.tags = Collections.unmodifiableList(new ArrayList<>(tags == null ? Collections.emptyList() : tags));
+        this.createdAtMillis = createdAtMillis;
+        this.updatedAtMillis = updatedAtMillis;
+        this.imagePath = value(imagePath);
+        this.sourceType = value(sourceType);
+        this.verified = verified;
     }
 
     public String searchableText() {
         return (name + " " + nameEn + " " + company + " " + title + " " + department + " "
-                + industry + " " + location + " " + phone + " " + email + " " + address + " "
-                + memo + " " + tagLine()).toLowerCase(Locale.KOREAN);
+                + industry + " " + location + " " + memo + " " + tagLine()).toLowerCase(Locale.KOREAN);
     }
 
     public String tagLine() {
         StringBuilder builder = new StringBuilder();
         for (String tag : tags) {
             if (builder.length() > 0) builder.append(' ');
-            builder.append('#').append(tag);
+            builder.append('#').append(value(tag));
         }
         return builder.toString();
     }
 
-    private static String value(String raw) {
+    static String value(String raw) {
         return raw == null ? "" : raw;
     }
 }

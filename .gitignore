@@ -1,0 +1,36 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Claude Code 개인 설정
+.claude/settings.local.json
+
+# Model and tokenizer artifacts (do not commit large/HF files)
+*.safetensors
+*.tflite
+*.task
+*.onnx
+models/
+app/src/main/assets/models/*
+!app/src/main/assets/models/.gitkeep
+app/src/main/assets/tokenizer/*
+!app/src/main/assets/tokenizer/.gitkeep
+*.tokenizer
+/tokenizer.json
+/tokenizer.model
+/tokenizer_config.json
+tokenizer.json
+tokenizer.model
+tokenizer_config.json
+.kotlin/
+
+# Python 캐시
+__pycache__/
+*.pyc

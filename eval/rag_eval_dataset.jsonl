@@ -1,0 +1,20 @@
+{"id":"Q001","query":"AI 개발팀 사람 찾아줘","relevantCardIds":["C002"],"type":"hybrid"}
+{"id":"Q002","query":"EmbeddingGemma 검색 실험 담당자","relevantCardIds":["C002"],"type":"semantic"}
+{"id":"Q003","query":"코어AI 엔지니어","relevantCardIds":["C002"],"type":"keyword"}
+{"id":"Q004","query":"투자 미팅에서 만난 대표","relevantCardIds":["C001"],"type":"memo"}
+{"id":"Q005","query":"파트너십 태그 있는 사람","relevantCardIds":["C001"],"type":"tag"}
+{"id":"Q006","query":"startup investment CEO","relevantCardIds":["C001"],"type":"korean_english_mixed"}
+{"id":"Q007","query":"제조 품질 담당자","relevantCardIds":["C003"],"type":"keyword"}
+{"id":"Q008","query":"스마트공장 프로젝트","relevantCardIds":["C003"],"type":"semantic"}
+{"id":"Q009","query":"부산 manufacturing manager","relevantCardIds":["C003"],"type":"korean_english_mixed"}
+{"id":"Q010","query":"첫 번째 사람 자세히","relevantCardIds":["C002"],"type":"multi_turn_reference"}
+{"id":"Q011","query":"임베딩 벡터 검색","relevantCardIds":["C002"],"type":"hybrid"}
+{"id":"Q012","query":"서울 전략팀 대표","relevantCardIds":["C001"],"type":"keyword"}
+{"id":"Q013","query":"판교 로컬 검색","relevantCardIds":["C002"],"type":"hybrid"}
+{"id":"Q014","query":"품질 검사 프로젝트 담당","relevantCardIds":["C003"],"type":"memo"}
+{"id":"Q015","query":"AI developer in Pangyo","relevantCardIds":["C002"],"type":"korean_english_mixed"}
+{"id":"Q016","query":"대표이사 파트너십","relevantCardIds":["C001"],"type":"hybrid"}
+{"id":"Q017","query":"검색 태그 명함","relevantCardIds":["C002"],"type":"tag"}
+{"id":"Q018","query":"네오팩토리 제조혁신팀","relevantCardIds":["C003"],"type":"keyword"}
+{"id":"Q019","query":"2번 사람 연락처 보여줘","relevantCardIds":["C001"],"type":"multi_turn_reference"}
+{"id":"Q020","query":"스마트공장 품질 태그","relevantCardIds":["C003"],"type":"tag"}

@@ -1,0 +1,14 @@
+Preferred real-device test flow: do not package large models in the APK.
+Push the model after install to the app-specific external files directory:
+
+/sdcard/Android/data/com.example.hjp/files/models/functiongemma_270m.litertlm
+
+The app also supports packaging the FunctionGemma 270M LiteRT-LM model here as:
+
+functiongemma_270m.litertlm
+
+or placing it in the private runtime files directory:
+
+files/models/functiongemma_270m.litertlm
+
+Large .litertlm files are intentionally ignored by git.
