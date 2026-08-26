@@ -714,6 +714,44 @@ def discourse_subjects(history, gazetteer):
 CORRECTION_MARKERS = ("아니라", "말고", "정정", "아니고")
 
 
+# ---------------------------------------------------------------------------
+# 필드 지시어 정규화 — "직장/어디 다녀" 를 "회사" 라는 정본 낱말로 바꿔 질의를 다시 쓴다.
+#
+# **왜 사전인가(측정으로 고른 것이다).** 가제티어는 '카드에 실재하는 값'(대전·이사·성다인)을
+# 데이터에서 자동으로 배운다. 그런데 '회사·직장·부서' 는 **값이 아니라 스키마를 가리키는 말**
+# 이라 카드 안에 없고, 그래서 배울 수가 없다. 대안 둘을 재보고 뺐다:
+#   · 필드 이름을 임베딩해 최근접 필드로 라우팅 -> 17개 발화에서 82.4%.
+#     하필 우리가 틀리는 말투에서 같이 틀렸다("직장이 어디지?" -> title(0.534), 글자 '직' 공유.
+#     "어디 다녀?" -> location). 게다가 사전은 모르면 LLM 에 넘기는데 임베딩은 **자신 있게**
+#     틀린 칸을 읽어 더 위험하다.
+#   · 질의를 그대로 임베딩해 회사값과 맞추기 -> 회사값('네트웍스솔루션즈')은 고유명사라
+#     '회사'·'직장' 어느 쪽과도 가깝지 않다(0.111 / 0.168 — 주소보다 낮다).
+# 필드는 7개로 고정이고 새로 생기지 않으므로 목록 관리 부담이 없다.
+#
+# **정규화로 넣는 이유.** 사전에 등록만 하면 답이 안 바뀐다 — "마민씨 직장이 어디지?" 는
+# 이름도 있고 한 칸이고 값도 차 있어서 field_list_answer(2칸 이상)·empty_field_answer(빈 칸)
+# 어느 우회도 안 걸린다. 그래서 **모델이 100% 맞히는 말투로 바꿔서** 보낸다(실측: "회사가
+# 어디야?" 41/41 · "회사 알려줘" 15/15 vs "직장이 어디지?" 5/6 · "어디 다녀?" 3/7).
+# resolve_query·carry_over_attribute·resolve_correction 이 이미 질의를 다시 쓰므로 같은 계열이다.
+#
+# 카드 값과 충돌하지 않는 낱말만 넣는다(실측: 직장·다녀·다니·근무·일해 전부 카드 등장 0건).
+# '소속' 은 **넣지 않는다** — 회사·부서 양쪽으로 읽힌다(임베딩 격차도 0.016 으로 모호했다).
+# 낱말 치환은 **뒤에 조사만 올 때**만 한다. "직장인"(직장+인)처럼 다른 낱말의 일부면
+# 건드리지 않는다. 조사까지 함께 삼켜서 정본 낱말 + 자연스러운 조사로 다시 붙인다 —
+# 그냥 "직장"->"회사" 로 바꾸면 "직장이"가 "회사이"(비문)가 된다.
+ATTRIBUTE_SYNONYMS = ((re.compile(r"직장(이|은|는|을|를|가|도|의)?(?=\s|[?!.,]|$)"), "회사"),)
+# 속성 명사가 아예 없는 말투는 구절째 바꾼다("어디 다녀?", "어디서 일해?").
+ATTRIBUTE_PHRASE_REWRITE = re.compile(r"어디\s*(?:에?서\s*)?(?:다니|다녀|근무|일하|일해)\S*")
+_JOSA_SUBJECT = {"이": "가", "은": "는"}  # 받침 있는 '직장' -> 받침 없는 '회사'
+
+
+def normalize_attribute_words(question: str) -> str:
+    """필드를 가리키는 말을 정본 낱말로 바꾼다. 값에 쓰이는 말은 건드리지 않는다."""
+    q = ATTRIBUTE_PHRASE_REWRITE.sub("회사가 어디야", question or "")
+    for pattern, canonical in ATTRIBUTE_SYNONYMS:
+        q = pattern.sub(lambda m: canonical + _JOSA_SUBJECT.get(m.group(1) or "", m.group(1) or ""), q)
+    return q
+
 def resolve_correction(question: str, gazetteer):
     """
     "손서윤씨가 아니라 남다은씨야. 그분 회사는?" 처럼 **대상을 바꾸는** 발화를
@@ -1293,6 +1331,8 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
     # 대상 정정은 대명사 치환(resolve_query)보다 **먼저** 푼다 — 뒤에 두면 '그분'이
     # 이미 옛 focus 로 바뀐 뒤라 정정이 무시된다.
     question = resolve_correction(question, GAZETTEER)
+    # 필드 지시어를 정본 낱말로 — 모델이 100% 맞히는 말투로 바꿔 보낸다.
+    question = normalize_attribute_words(question)
 
     turn_id = uuid.uuid4().hex
     now_ms = int(time.time() * 1000)

@@ -565,16 +565,61 @@
       <table>
         <thead><tr><th>지표</th><th>값</th><th>분모</th><th>첫 채점 → 채점기 수정 후</th></tr></thead>
         <tbody>
-          <tr><td>Answer Relevancy</td><td class="num good">0.952</td><td>314/330 요청 필드 (정답 카드 있는 턴만)</td><td class="num">0.793 → 0.952</td></tr>
-          <tr><td>Faithfulness</td><td class="num good">1.000</td><td>272/272 주장 · 233턴</td><td class="num">0.886 → 1.000</td></tr>
+          <tr><td>Answer Relevancy</td><td class="num good">0.958</td><td>316/330 요청 필드 (정답 카드 있는 턴만)</td><td class="num">0.793 → 0.952 (채점기) → 0.958 (사전)</td></tr>
+          <tr><td>Faithfulness</td><td class="num good">1.000</td><td>264/264 주장 · 234턴</td><td class="num">0.886 → 1.000</td></tr>
           <tr><td>연락처 날조 없음</td><td class="num good">1.000</td><td>349/349</td><td class="num">1.000</td></tr>
-          <tr><td>체크리스트 (LLM 턴)</td><td class="num">0.945</td><td>273/289</td><td class="num">발화 다양화 전 0.990</td></tr>
+          <tr><td>체크리스트 (LLM 턴)</td><td class="num good">0.965</td><td>279/289</td><td class="num">발화 다양화 전 0.990 · 사전 전 0.945</td></tr>
         </tbody>
         <caption><b>채점기를 먼저 의심했다.</b> 첫 실행 실패 121건 중 <b>105건이 채점기 오탐</b>이었다 — 긴 값 안의 짧은 값, 번지 접두 매치,
         같은 핵심어의 다른 카드로 정규화, 2글자 직함 누락, 속성 생략 후속 오분류, 정답 없는 턴에 관련성 부여.
         <code>--dump</code> 덕에 재생성 없이 네 번 고쳐 다시 쟀다(각 3초). 오른쪽 열의 상승은 모델이 아니라 자가 고쳐진 것이다.
-        남은 16건은 전부 실제 결함: 직장/어디 다녀 5 · {n}씨도?/어때? 5 · 복수 후속 이름만 4 · 부서→총1명 2.</caption>
+        남은 <b>14건</b>은 전부 실제 결함: 복수 후속 이름만 5 · {n}씨도?/어때? 6 · 부서→총1명 2 · 연락처→전무 1.
+        (직장/어디 다녀 5건은 아래 질의 정규화로 해소됐다.)</caption>
       </table>
+    </div>
+
+    <h3>질의 정규화(사전)의 효과 — 같은 채점기로 전후를 쟀다</h3>
+    <p style="font-size:.9rem;color:var(--ink-2);margin:0 0 .6rem">
+      <code>직장이 어디지?</code> <code>어디 다녀?</code> 를 서버가 회사 질문으로 못 읽었다.
+      <b>검색 실패가 아니다</b> — 15턴 모두 정답 카드 한 장을 정확히 검색했고 답변만 다른 칸을 골랐다.
+      가제티어는 카드에 없는 낱말(<code>회사</code>·<code>직장</code>)을 배울 수 없으므로,
+      <code>normalizeAttributeWords</code> 로 질의를 정규형으로 바꿔 보낸다.
+      <b>두 덤프를 같은 채점기로 재채점</b>해 사전만의 몫을 갈랐다(모델 재생성 없음).
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>지표</th><th>사전 없음</th><th>사전 있음</th></tr></thead>
+        <tbody>
+          <tr><td>체크리스트 (LLM 턴)</td><td class="num">0.945 (273/289)</td><td class="num good">0.965 (279/289)</td></tr>
+          <tr><td>Answer Relevancy</td><td class="num">0.952 (314/330)</td><td class="num good">0.958 (316/330)</td></tr>
+          <tr><td>Faithfulness</td><td class="num">1.000</td><td class="num">1.000</td></tr>
+          <tr><td>겨냥한 15턴의 실패</td><td class="num">7턴</td><td class="num good">1턴</td></tr>
+        </tbody>
+        <caption>직접 대조가 근거다 —
+        <code>마민씨 직장이 어디지?</code> 경상북도 포항시 북구 → <b>네트웍스솔루션즈</b> ·
+        <code>두준씨 어디 다녀?</code> 두준 → <b>(주)웰빙바이오</b> ·
+        <code>서서준씨 어디 다녀?</code> 제주시 대학로 695 → <b>(주) 충청스튜디오</b>.</caption>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>전체 평균만 보고 효과를 판정하면 틀린다.</strong> 위 관련성은 +0.006 뿐이지만
+      턴 단위 diff 는 <b>개선 10턴 / 악화 6턴</b>이었다. 악화 6턴은 사전이 건드리지 않는 복수 후속에서
+      나왔고, <b>같은 문구가 시나리오별로 갈렸다</b>(<code>그분들 회사는?</code> 이 한쪽은 개선, 한쪽은 악화).
+      모델의 비결정성이지 사전의 부작용이 아니다. 겨냥한 유형이 전체의 4% 라 잡음에 묻힌다 —
+      <b>목표 유형을 따로 세야</b> 효과가 보인다.</p>
+    </div>
+
+    <h3>관련성 지표의 한계 — 개방형·생략형 질문에서는 못 믿는다</h3>
+    <div class="note">
+      <p>전후 diff 에서 <b>라벨이 뒤집힌 사례</b>가 나왔다:</p>
+      <p><code>용지호씨는?</code> 유한회사 전라랩스 → 용지호 &nbsp;·&nbsp;
+         <code>그럼 변지훈씨는?</code> (주) 내추럴패키징 → 변지훈 디렉터<br>
+         둘 다 <b>명백히 악화인데 채점기가 개선으로 찍었다.</b></p>
+      <p><code>그럼 {n}씨는?</code> 처럼 <b>속성이 문면에 없는 질문</b>에서는 <code>ATTRIBUTE_FIELD</code> 가
+      요청 필드를 못 집는다. 따라서 <b>관련성은 필드를 명시한 질문에서만 인용하고</b>, 개방형 후속은
+      체크리스트(정답 값 대조)로 판정한다 — 실제로 주제 전환 유형의 체크리스트가
+      <b>0.750</b>(n=24)으로 현재 최약점이다.</p>
     </div>
 
     <div class="note">
@@ -666,7 +711,7 @@
       그 지표는 전량에서도 대상이 10턴뿐이라 25개 표본에는 2턴밖에 안 들어간다.
     </p>
 
-    <h3>프롬프트 규칙 추가 4전 4패, 결정적 우회 8전 8승</h3>
+    <h3>프롬프트 규칙 추가 4전 4패, 결정적 우회 9전 9승</h3>
     <p style="font-size:.9rem;color:var(--ink-2);margin:0 0 .6rem">
       가르는 기준은 하나다 — <b>답에 필요한 사실을 코드가 이미 아는가.</b>
       빈 칸인지, 어느 칸을 물었는지, 전체가 몇 장인지는 코드가 안다. 그건 모델에 맡기지 않는다.

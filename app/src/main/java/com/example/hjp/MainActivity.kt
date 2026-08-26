@@ -1274,14 +1274,15 @@ private fun runChat(
             // ordinalIdx 블록으로 새서 직전 카드 목록의 1번을 고른다.
             // 대상 정정은 대명사 치환(resolveSearchQuery)보다 **먼저** 푼다 —
             // 뒤에 두면 '그분'이 이미 옛 focus 로 바뀐 뒤라 정정이 무시된다.
-            resolveCorrection(
+            // 필드 지시어를 정본 낱말로 — 모델이 100% 맞히는 말투로 바꿔 보낸다.
+            normalizeAttributeWords(resolveCorrection(
                 resolveDiscourseReference(
                     question,
                     session.toolContextValue(AgentSession.KEY_SUBJECT_HISTORY),
                     prevCardIds.size,
                 ),
                 runCatching { searchService.knownNamesIn(question) }.getOrNull().orEmpty(),
-            ),
+            )),
             session.toolContextValue(AgentSession.KEY_LAST_ATTRIBUTE),
         ),
         session.toolContextValue(AgentSession.KEY_LAST_FILTER_TERMS),
@@ -1632,6 +1633,50 @@ internal fun resolveDiscourseReference(
     return "$name $rest".trim()
 }
 
+
+
+/**
+ * 필드 지시어 정규화 — "직장/어디 다녀" 를 정본 낱말 "회사" 로 바꿔 질의를 다시 쓴다.
+ *
+ * **왜 사전인가(측정으로 고른 것이다).** [CardGazetteer] 는 '카드에 실재하는 값'(대전·이사·
+ * 성다인)을 데이터에서 자동으로 배운다. 그런데 '회사·직장·부서' 는 **값이 아니라 스키마를
+ * 가리키는 말**이라 카드 안에 없고, 그래서 배울 수가 없다. 대안 둘을 재보고 뺐다:
+ *  - 필드 이름을 임베딩해 최근접 필드로 라우팅 -> 17개 발화에서 82.4%. 하필 우리가 틀리는
+ *    말투에서 같이 틀렸다("직장이 어디지?" -> title, 글자 '직' 공유 / "어디 다녀?" -> location).
+ *    사전은 모르면 LLM 에 넘기지만 임베딩은 **자신 있게** 틀린 칸을 읽어 더 위험하다.
+ *  - 질의를 그대로 임베딩해 회사값과 맞추기 -> 회사값('네트웍스솔루션즈')은 고유명사라
+ *    '회사'·'직장' 어느 쪽과도 가깝지 않다(0.111 / 0.168 — 주소보다 낮다).
+ *
+ * **왜 등록이 아니라 정규화인가.** [ATTRIBUTE_FIELD] 에 넣기만 하면 답이 안 바뀐다 —
+ * "마민씨 직장이 어디지?" 는 이름도 있고 한 칸이고 값도 차 있어서 [fieldListAnswer](2칸 이상)·
+ * [emptyFieldAnswer](빈 칸) 어느 우회도 안 걸린다. 그래서 **모델이 100% 맞히는 말투로 바꿔서**
+ * 보낸다(실측: "회사가 어디야?" 41/41 · "회사 알려줘" 15/15 vs "직장이 어디지?" 5/6 ·
+ * "어디 다녀?" 3/7).
+ *
+ * 카드 값과 충돌하지 않는 낱말만 넣는다(실측: 직장·다녀·다니·근무·일해 전부 카드 등장 0건).
+ * '소속' 은 넣지 않는다 — 회사·부서 양쪽으로 읽힌다(임베딩 격차도 0.016 으로 모호했다).
+ */
+private val ATTRIBUTE_PHRASE_REWRITE =
+    Regex("""어디\s*(?:에?서\s*)?(?:다니|다녀|근무|일하|일해)\S*""")
+
+/**
+ * 낱말 치환은 **뒤에 조사만 올 때**만 한다 — "직장인"(직장+인)처럼 다른 낱말의 일부면
+ * 건드리지 않는다. 조사까지 함께 삼켜 정본 낱말 + 자연스러운 조사로 다시 붙인다.
+ * 그냥 "직장"->"회사" 로 바꾸면 "직장이" 가 "회사이"(비문)가 된다.
+ */
+private val ATTRIBUTE_WORD_REWRITE = Regex("""직장(이|은|는|을|를|가|도|의)?(?=\s|[?!.,]|$)""")
+
+/** 받침 있는 '직장' -> 받침 없는 '회사' 로 바뀌므로 주격·주제 조사를 맞춘다. */
+private val JOSA_AFTER_VOWEL = mapOf("이" to "가", "은" to "는")
+
+internal fun normalizeAttributeWords(question: String): String {
+    var q = ATTRIBUTE_PHRASE_REWRITE.replace(question, "회사가 어디야")
+    q = ATTRIBUTE_WORD_REWRITE.replace(q) { m ->
+        val josa = m.groupValues[1]
+        "회사" + (JOSA_AFTER_VOWEL[josa] ?: josa)
+    }
+    return q
+}
 
 /** 대상 정정("A가 아니라 B야") 표지. */
 private val CORRECTION_MARKERS = listOf("아니라", "말고", "정정", "아니고")

@@ -629,4 +629,33 @@ class MainActivityTest {
         assertEquals(listOf("전화번호", "이메일"),
             requestedFields("전화번호랑 이메일 알려줘").map { it.second })
     }
+
+    // ---- 필드 지시어 정규화 ----
+
+    @Test
+    fun `직장과 어디 다녀를 회사로 바꾼다`() {
+        // 실측: "회사가 어디야?" 41/41 인데 "직장이 어디지?" 5/6, "어디 다녀?" 3/7 이었다.
+        // 값은 카드에 있고 어느 칸인지만 정하면 되는 턴이라, 모델이 잘 읽는 말투로 바꿔 보낸다.
+        assertEquals("마민씨 회사가 어디지?", normalizeAttributeWords("마민씨 직장이 어디지?"))
+        assertEquals("직장은 -> 회사는", "회사는 어디야?", normalizeAttributeWords("직장은 어디야?"))
+        assertEquals("회사 알려줘", normalizeAttributeWords("직장 알려줘"))
+        listOf("두준씨 어디 다녀?", "라민씨 어디 다니세요?", "어디서 일해?").forEach {
+            assertTrue(it, normalizeAttributeWords(it).contains("회사가 어디야"))
+        }
+    }
+
+    @Test
+    fun `다른 낱말의 일부면 건드리지 않는다`() {
+        // "직장인" 은 직장+인 이지 필드 지시어가 아니다.
+        listOf("직장인 몇 명?", "직장인분들 찾아줘").forEach {
+            assertEquals(it, it, normalizeAttributeWords(it))
+        }
+    }
+
+    @Test
+    fun `이미 정본인 말투와 무관한 질의는 그대로다`() {
+        listOf("마민씨 회사가 어디야?", "판교에 몇 명이야?", "그 사람 부서는?").forEach {
+            assertEquals(it, it, normalizeAttributeWords(it))
+        }
+    }
 }
