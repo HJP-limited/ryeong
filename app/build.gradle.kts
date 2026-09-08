@@ -72,5 +72,13 @@ dependencies {
     // localagents-rag의 내부 proto 클래스가 이걸 필요로 하는데 SDK의 POM에 선언이 빠져 있어 직접 추가해야 한다
     // (NoClassDefFoundError: Lcom/google/protobuf/GeneratedMessageLite;)
     implementation("com.google.protobuf:protobuf-javalite:4.35.1")
-    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    // **버전을 고정한다 — `latest.release` 는 쓰지 않는다.**
+    // 2026-09-04 에 0.17.0 이 올라오면서 아무도 코드를 건드리지 않았는데 빌드가 깨졌다:
+    // 0.17.0 은 Kotlin 2.4 로 빌드돼 metadata 버전이 2.4.0 인데, 이 프로젝트의 컴파일러
+    // (Kotlin 2.2.10)는 2.3.0 까지만 읽는다 →
+    //   "Class 'com.google.ai.edge.litertlm.Engine' was compiled with an incompatible version of Kotlin"
+    // 부동 버전은 어제 되던 빌드가 오늘 깨지게 만들고, 출시 빌드를 재현 불가능하게 한다.
+    // 최신(0.17.0 이상)으로 올리려면 Kotlin 플러그인을 2.4.x 로 함께 올려야 한다(카탈로그의
+    // kotlin-compose 가 version.ref = "kotlin" 이라 Compose 컴파일러도 같이 움직인다).
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
 }
