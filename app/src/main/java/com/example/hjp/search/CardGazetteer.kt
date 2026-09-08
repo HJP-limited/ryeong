@@ -366,7 +366,11 @@ fun applyFieldFilters(cards: List<BusinessCardEntity>, filters: FieldFilters): L
     // 주의: 직함 조건을 '추출'하는 것 자체는 유지해야 한다. extractFieldFilters 가
     // "상무"를 직함으로 선점해야 지역 조건으로 새지 않는다 — 지역으로 새면 광주
     // '상무대로' 사람만 남고 진짜 상무가 전멸한다.
-    if (filters.titles.isNotEmpty() && filters.names.isEmpty() && filters.locations.isEmpty()) {
+    // 회사도 함께 본다 — 파이썬 쪽은 '직함이 유일한 조건일 때'가 조건이고, 회사가
+    // 붙었는데 정렬로 빠지면 "샤인기계 상무"가 샤인기계 밖 상무까지 다 데려온다.
+    if (filters.titles.isNotEmpty() && filters.names.isEmpty() &&
+        filters.locations.isEmpty() && filters.companies.isEmpty()
+    ) {
         return cards.sortedBy { card ->
             val titleWords = KeywordSearchRanker.normalize(card.title.orEmpty()).split(" ")
             if (filters.titles.any { it in titleWords }) 0 else 1

@@ -541,7 +541,7 @@
     <h3>세 층은 서로 다른 것을 잰다</h3>
     <div class="scroll">
       <table>
-        <thead><tr><th>층</th><th>묻는 것</th><th>회사 물었는데 주소 답함</th><th>남의 회사 답함</th><th>날조 번호</th></tr></thead>
+        <thead><tr><th>층</th><th>묻는 것</th><th>회사 물었는데 주소 답함</th><th>남의 회사 답함</th><th>미등록 번호</th></tr></thead>
         <tbody>
           <tr><td>Answer Relevancy</td><td>맞는 <b>종류</b>인가</td><td class="num weak">0</td><td class="num good">1</td><td class="num good">1</td></tr>
           <tr><td>Faithfulness</td><td><b>컨텍스트에서</b> 왔나</td><td class="num good">1</td><td class="num weak">0</td><td class="num weak">0</td></tr>
@@ -553,7 +553,7 @@
     </div>
 
     <div class="note gapn">
-      <p><strong>한계.</strong> 데이터에 없는 회사명을 지어내면 못 잡는다(색인이 없어서). 전화·이메일 날조는 정규식으로 잡힌다.
+      <p><strong>한계.</strong> 데이터에 없는 회사명을 지어내면 못 잡는다(색인이 없어서). 전화·이메일 미등록 연락처는 정규식으로 잡힌다.
       직함·이름은 2~3자라 부분 일치 오탐이 커서 충실성 주장으로 세지 않는다. 컨텍스트 = 그 턴의 카드이고 대화 이력은
       포함하지 않는다 — 이력에는 있지만 이번 카드에 없는 값을 쓰면 근거 없음으로 본다. <b>그게 바로 "옛 인물 값" 실패 모드다.</b></p>
       <p><strong>재현.</strong> <code>--dump</code>로 턴별 (질문·답변·컨텍스트 카드·정답)을 JSONL로 남긴다. 채점 기준을 바꿔도
@@ -567,7 +567,7 @@
         <tbody>
           <tr><td>Answer Relevancy</td><td class="num good">0.958</td><td>316/330 요청 필드 (정답 카드 있는 턴만)</td><td class="num">0.793 → 0.952 (채점기) → 0.958 (사전)</td></tr>
           <tr><td>Faithfulness</td><td class="num good">1.000</td><td>264/264 주장 · 234턴</td><td class="num">0.886 → 1.000</td></tr>
-          <tr><td>연락처 날조 없음</td><td class="num good">1.000</td><td>349/349</td><td class="num">1.000</td></tr>
+          <tr><td>미등록 연락처 없음</td><td class="num good">1.000</td><td>349/349</td><td class="num">1.000</td></tr>
           <tr><td>체크리스트 (LLM 턴)</td><td class="num good">0.965</td><td>279/289</td><td class="num">발화 다양화 전 0.990 · 사전 전 0.945</td></tr>
         </tbody>
         <caption><b>채점기를 먼저 의심했다.</b> 첫 실행 실패 121건 중 <b>105건이 채점기 오탐</b>이었다 — 긴 값 안의 짧은 값, 번지 접두 매치,

@@ -1759,16 +1759,29 @@ internal fun resolveCorrection(question: String, knownNames: List<String>): Stri
     }.toSet()
     val kept = ordered.filterNot { it in rejected }
     val target = if (kept.isNotEmpty() && rejected.isNotEmpty()) kept.last() else ordered.last()
-    // 정정 뒤의 실제 요청만 남긴다 — 마지막 문장이 그 요청이다.
-    var tail = question
-    for (sep in listOf(".", "!", "?")) {
-        val parts = tail.split(sep).filter { it.isNotBlank() }
-        if (parts.size > 1) tail = parts.last()
+    // 정정 뒤의 실제 요청만 남긴다. **요청이 담긴 문장**을 고른다 — 물어본 칸(속성 명사)이
+    // 있는 문장이 요청이다. 무조건 마지막 문장을 쓰면 "X씨 회사 말한 거야. Y씨 말고" 에서
+    // 'Y씨 말고' 만 남아 물어본 칸이 사라지고(벤치 v1.1 실패 6건), 반대로 대상 이름이 있는
+    // 문장을 먼저 고르면 "…남다은씨야. 그분 회사는?" 에서 요청이 사라진다.
+    // **속성이 먼저, 이름은 그다음**이다.
+    val parts = question.split(Regex("[.!?]")).filter { it.isNotBlank() }
+    var tail = if (parts.size > 1) {
+        val cand = parts.filter { attributeOf(it) != null }.ifEmpty { parts.filter { target in it } }
+        cand.ifEmpty { parts }.last()
+    } else {
+        question
     }
-    // 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
-    // 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다.
-    for (n in ordered) if (n != target) tail = tail.replace("${n}씨", " ").replace(n, " ")
+    // 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
+    // 이름은 **전부** 지운다(대상은 어차피 앞에 다시 붙인다). 조사까지 함께 걷어야
+    // "손도윤씨가 아니라" 의 '가' 같은 조각이 안 남는다.
+    for (n in ordered) {
+        tail = tail.replace(Regex(Regex.escape(n) + "(?:씨|님)?(?:가|이|은|는|을|를|도|의)?"), " ")
+    }
     for (p in FOLLOWUP_PRONOUNS) tail = tail.replace(p, " ")
+    // 정정 표지 자체도 요청이 아니다.
+    for (marker in listOf("말한 거야", "말한거야", "말고", "아니라", "아니고", "아니")) {
+        tail = tail.replace(marker, " ")
+    }
     tail = tail.replace(Regex("\\s+"), " ").trim()
     return "$target $tail".trim()
 }

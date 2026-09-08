@@ -126,16 +126,25 @@ CAPABILITY_PATTERNS = (
     "뭐 할 수", "뭘 할 수", "무엇을 할 수", "할 수 있는 게", "할 수 있는게",
     "어떤 기능", "기능이 뭐", "기능 뭐", "뭐 도와", "뭘 도와", "어떻게 쓰는",
 )
-# Kotlin 은 이 목록을 ToolRegistry.capabilityLabels() 로 도구에서 파생한다.
-# 여기(거울)에는 레지스트리가 없어 같은 문장을 적어 둔다. 도구를 추가하면 양쪽을 같이 고칠 것.
+# **출처는 agent_0822 의 도구 이름들**이다(AgentWorkflowPolicy 상수 6개):
+# search_contacts / get_contact / update_business_card / create_calendar_event /
+# open_compose / get_current_datetime. 저쪽에는 이름만 있고 사용자에게 보여줄 문구가
+# 없어서 여기서 한 줄씩 붙인다. 도구가 늘면 이 목록에 한 줄을 더한다.
+#
+# get_current_datetime 은 뺀다 — 일정 등록이 '내일 2시' 를 절대 시각으로 바꿀 때 쓰는
+# 내부 보조라 사용자가 시키는 기능이 아니다. 넣으면 안내가 구현 목록처럼 읽힌다.
+#
+# Kotlin 의 MainActivity.AGENT_TOOL_CAPABILITIES 와 **같은 순서·같은 문장**이어야 한다.
 CAPABILITY_TOOL_LABELS = (
-    "기기의 캘린더 앱에 일정 등록 화면을 엽니다.",
-    "메일 또는 문자(SMS) 작성 화면을 초안이 채워진 상태로 엽니다.",
+    "이름·회사·지역·직함으로 명함을 찾습니다.",                     # search_contacts
+    "찾은 명함의 상세 정보를 보여줍니다.",                          # get_contact
+    "명함 정보를 수정합니다.",                                      # update_business_card
+    "기기의 캘린더 앱에 일정 등록 화면을 엽니다.",                  # create_calendar_event
+    "메일 또는 문자(SMS) 작성 화면을 초안이 채워진 상태로 엽니다.",   # open_compose
 )
 CAPABILITY_ANSWER = (
-    "저는 명함 검색을 도와드리는 온디바이스 AI 어시스턴트입니다. 이런 걸 할 수 있어요:\n"
-    + "\n".join(["- 이름·회사·지역·직함으로 명함을 찾습니다."]
-                + ["- " + t for t in CAPABILITY_TOOL_LABELS])
+    "저는 명함 검색을 도와드리는 온디바이스 AI 어시스턴트입니다. 이런 걸 할 수 있어요:"
+    + "".join(chr(10) + "- " + t for t in CAPABILITY_TOOL_LABELS)
 )
 
 # "전체 몇 장/명" 같이 조건 없이 전체를 묻는 질문 — 결정적으로 우회한다.
@@ -197,6 +206,20 @@ def default_conversation_memory() -> dict:
         "pending_actions": [],
         "resolved_actions": [],
         "history_digest": "",
+        # 대화에 등장한 인물, 처음 나온 순서. 앱의 AgentSession.KEY_SUBJECT_HISTORY 와 같다.
+        # history 는 최근 4턴으로 잘리고 앞은 digest 로 접히므로, 거기서 인물을 뽑으면
+        # "처음 언급한 사람" 이 창 안의 첫 사람(실제로는 2~3번째)이 된다 — 통합 벤치
+        # v1 기준선에서 6턴째+ 순서 지시 7건이 전부 이것이었고, **앱에는 없는 서버 전용
+        # 결함**이었다(앱은 별도 목록을 유지한다). 평가가 제품에 없는 실패를 재면 안 된다.
+        "subject_history": [],
+        # 이름 -> 카드 id. **동명이인을 이 대화가 어느 쪽으로 정했는지** 기억한다.
+        #
+        # subject_history 는 이름만 담아서 "백다인이 나왔다" 까지만 안다. 그런데 카드에
+        # 백다인은 두 장이다. 회사로 한 명을 특정한 뒤 몇 턴 지나서 이름만으로 다시
+        # 부르면, focus 도 prev_card_ids 도 그새 방해 인물로 덮여서 어느 백다인인지
+        # 알 길이 없다 — v1.3 실패 3건이 전부 이것이고, 되묻지도 않고 틀린 번호를 줬다.
+        # 이름이 한 장으로 좁혀진 턴에서만 기록하므로, 애매한 채로 지나간 턴은 안 남는다.
+        "subject_cards": {},
     }
 
 
@@ -435,6 +458,29 @@ def finalize_turn(memory, turn_id, now_ms, question, answer, executed_tools, his
         recent = history[-MAX_RECENT_TURNS:] if history else []
         return memory, recent
     memory = memory_reduce_completed_turn(memory, turn_id, now_ms, question, executed_tools)
+    # 이번 턴의 인물을 subject_history 에 붙인다(앱의 appendSubject 와 동일: 처음 나온 순서, 중복 없음).
+    try:
+        turn_names = (ev.extract_field_filters(question, GAZETTEER) or {}).get("name") or []
+    except Exception:  # noqa: BLE001
+        turn_names = []
+    if turn_names:
+        memory = dict(memory)
+        seen = list(memory.get("subject_history") or [])
+        for n in turn_names:
+            if n not in seen:
+                seen.append(n)
+        memory["subject_history"] = seen
+
+    # 이번 턴이 어떤 이름을 **한 장으로** 좁혔으면 그 짝을 기억한다. 회사로 특정한
+    # 턴("샤인기계 백다인씨")이 여기 해당한다. 여러 장이 남았으면 기록하지 않는다 —
+    # 애매한 채로 지나간 턴을 기억하면 나중에 그 애매함을 확신으로 둔갑시킨다.
+    pinned = [cid for cid in (card_ids or []) if cid in CARDS_BY_ID]
+    if turn_names and len(pinned) == 1:
+        name = CARDS_BY_ID[pinned[0]]["name"]
+        if name in turn_names:
+            memory = dict(memory)
+            memory["subject_cards"] = {**(memory.get("subject_cards") or {}),
+                                       name: pinned[0]}
     full_history = history + [{"q": question, "a": answer}]
     if len(full_history) > MAX_RECENT_TURNS:
         evicted = full_history[:-MAX_RECENT_TURNS]
@@ -782,25 +828,39 @@ def resolve_correction(question: str, gazetteer):
     kept = [n for n in ordered if n not in rejected]
     target = kept[-1] if kept and rejected else ordered[-1]
     # 정정 뒤의 실제 요청만 남긴다. 마지막 문장이 그 요청이다.
-    tail = question
-    for sep in (".", "!", "?"):
-        parts = [p for p in tail.split(sep) if p.strip()]
-        if len(parts) > 1:
-            tail = parts[-1]
-    # 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
+    # **요청이 담긴 문장**을 고른다 — 물어본 칸(속성 명사)이 있는 문장이 요청이다.
+    # 무조건 마지막 문장을 쓰면 "X씨 회사 말한 거야. Y씨 말고" 에서 'Y씨 말고' 만 남아
+    # 물어본 칸이 사라진다(실측: 통합 벤치 v1.1 기준선 실패 6건이 전부 이 어순).
+    # 반대로 대상 이름이 있는 문장을 먼저 고르면 "…남다은씨야. 그분 회사는?" 에서
+    # 정정 문장만 남아 요청이 사라진다 — **속성이 먼저, 이름은 그다음**이다.
+    parts = [p for p in re.split(r"[.!?]", question) if p.strip()]
+    if len(parts) > 1:
+        cand = [p for p in parts if attribute_of(p)] or [p for p in parts if target in p]
+        tail = (cand or parts)[-1]
+    else:
+        tail = question
+    # 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
+    # 이름은 **전부** 지운다(대상은 어차피 앞에 다시 붙인다). 조사까지 함께 걷어야
+    # "손도윤씨가 아니라" 의 '가' 같은 조각이 안 남는다.
     for n in ordered:
-        if n == target:          # 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다
-            continue
-        tail = tail.replace(n + "씨", " ").replace(n, " ")
+        tail = re.sub(re.escape(n) + r"(?:씨|님)?(?:가|이|은|는|을|를|도|의)?", " ", tail)
     for p in PRONOUNS:
         tail = tail.replace(p, " ")
+    # 정정 표지 자체도 요청이 아니다.
+    for marker in ("말한 거야", "말한거야", "말고", "아니라", "아니고", "아니"):
+        tail = tail.replace(marker, " ")
     tail = re.sub(r"\s+", " ", tail).strip()
     return f"{target} {tail}".strip()
 
 
-def resolve_discourse_reference(question: str, history, prev_card_ids, gazetteer):
-    """담화 순서로 사람을 가리키면 그 이름을 넣어 질의를 다시 쓴다. 아니면 원문 그대로."""
-    if not history:
+def resolve_discourse_reference(question: str, history, prev_card_ids, gazetteer, subjects=None):
+    """
+    담화 순서로 사람을 가리키면 그 이름을 넣어 질의를 다시 쓴다. 아니면 원문 그대로.
+
+    subjects 는 memory["subject_history"](전체 대화의 인물 목록)다. 주면 그걸 쓰고,
+    없으면 history 에서 뽑는다 — 단 history 는 최근 4턴뿐이라 긴 대화에서는 틀린다.
+    """
+    if not history and not subjects:
         return question
     # 이름이 이미 있으면 지시가 아니다.
     try:
@@ -819,7 +879,7 @@ def resolve_discourse_reference(question: str, history, prev_card_ids, gazetteer
     if idx is None:
         return question
 
-    subjects = discourse_subjects(history, gazetteer)
+    subjects = list(subjects) if subjects else discourse_subjects(history, gazetteer)
     if not subjects:
         return question
     name = subjects[-1] if idx < 0 else (subjects[idx] if idx < len(subjects) else None)
@@ -1144,7 +1204,14 @@ def names(id_list, n=5):
     return [CARDS_BY_ID[i]["name"] + " · " + (CARDS_BY_ID[i].get("company") or "") for i in id_list[:n]]
 
 
-def rag_context(id_list, total_matches=None):
+# 답변에 실제로 쓰이는 7개 칸. industry·location·memo·tags 는 질문 대상이 아니고
+# (location 은 address 와 중복), 컨텍스트의 30~40% 를 차지한다. 무관한 칸이 많을수록
+# 2B 모델이 옆 칸 값으로 때우는 실패가 잦았다 — 절제 실험으로 기여도를 잰다.
+# 단 tags 는 개념형 질의("AI 다루는 사람")의 관련성 판단 근거일 수 있어 결과를 보고 정한다.
+LEAN_RAG_FIELDS = ("name", "company", "title", "department", "phone", "email", "address")
+
+
+def rag_context(id_list, total_matches=None, lean=False):
     """
     카드 컨텍스트. 맨 앞에 인원수를 명시한다 — 2B 모델은 목록의 개수를 세다가 자주 틀린다
     (실측: 판교 5명을 정확히 검색했는데 답변은 "4명입니다"). 세는 일을 모델에 맡기지 않는다.
@@ -1159,7 +1226,7 @@ def rag_context(id_list, total_matches=None):
     blocks = []
     for i, cid in enumerate(id_list, 1):
         c = CARDS_BY_ID[cid]
-        fields = "\n".join(f"{f}: {c.get(f, '')}" for f in RAG_FIELDS)
+        fields = "\n".join(f"{f}: {c.get(f, '')}" for f in (LEAN_RAG_FIELDS if lean else RAG_FIELDS))
         blocks.append(f"[{i}번]\n{fields}")
     shown = len(id_list)
     if not shown:
@@ -1299,7 +1366,24 @@ def _deterministic_reply(question, focus, memory, turn_id, now_ms, history, answ
 
 
 def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=None,
-             dry_run=False):
+             dry_run=False, no_rewrite=False, no_bypass=False, lean_context=False):
+    """
+    no_rewrite / no_bypass 는 **절제 실험용 스위치**다(제품 동작이 아니다).
+
+    우리는 질의를 여섯 단계로 다시 쓰고, 아홉 곳에서 모델을 아예 건너뛴다. 각 단계는
+    개별 실측으로 넣었지만 **"다 빼면 얼마나 나쁜가"** 는 한 번도 재지 않았다.
+    그래서 "모델을 과소평가하고 있는 것 아니냐" 는 물음에 답할 수가 없었다.
+
+      no_rewrite=True   여섯 단계(담화 지시·정정·필드 정규화·속성 이어받기·조건 누적·
+                        대명사 치환)를 전부 끈다. 모델이 원문 그대로 받는다.
+      no_bypass=True    결정적 우회(기능 안내·자기참조·전체 개수·빈 칸·여러 칸·답변 수리)를
+                        끄고 전부 모델에 맡긴다.
+      lean_context=True 카드 컨텍스트를 답변에 쓰이는 7칸으로 줄인다(industry·location·
+                        memo·tags 제거). 입력 토큰 낭비가 정확도에 영향을 주는지 본다.
+
+    요청 단위 스위치라 서버를 다시 띄우지 않아도 같은 세션에서 두 설정을 비교할 수 있다 —
+    모델 로딩이 1분 넘게 걸려서, 재시작을 끼우면 비교가 다른 프로세스 상태에서 이뤄진다.
+    """
     memory = conversation_memory or default_conversation_memory()
     history = history or []
 
@@ -1324,18 +1408,20 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
         (a for a in (attribute_of((h or {}).get("q", "")) for h in reversed(history or [])) if a),
         None,
     )
-    question = carry_over_attribute(question, last_attr)
+    question = question if no_rewrite else carry_over_attribute(question, last_attr)
     # 앞 턴에 걸렸던 필드 조건어를 history 에서 되짚어 "그중에 …" 질의에 이어 붙인다
     # (앱에서는 AgentSession.KEY_LAST_FILTER_TERMS 가 같은 역할).
     prev_terms = next(
         (t for t in ((h or {}).get("filter_terms") for h in reversed(history or [])) if t),
         None,
     )
-    question = apply_narrowing(question, prev_terms)
+    question = question if no_rewrite else apply_narrowing(question, prev_terms)
     # '처음에 물어본 사람' 처럼 대화 순서로 사람을 가리키면 그 이름으로 다시 쓴다.
     # **ordinal_index 블록보다 먼저** 해야 한다 — 뒤에 두면 '첫 번째 사람'이 직전 카드
     # 목록의 1번을 고르는 쪽으로 새서 대화 순서를 못 본다.
-    question = resolve_discourse_reference(question, history, prev_card_ids, GAZETTEER)
+    if not no_rewrite:
+        question = resolve_discourse_reference(question, history, prev_card_ids, GAZETTEER,
+                                               subjects=memory.get("subject_history"))
     # 대상 정정은 대명사 치환(resolve_query)보다 **먼저** 푼다 — 뒤에 두면 '그분'이
     # 이미 옛 focus 로 바뀐 뒤라 정정이 무시된다.
     question = resolve_correction(question, GAZETTEER)
@@ -1401,7 +1487,7 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
             answer = (field_list_answer(question, top_ids)
                       or empty_field_answer(question, top_ids)
                       or call_gemma(build_prompt(memory, recent_pairs, question,
-                                                 rag_context(top_ids), turn_id, followup=True)))
+                                                 rag_context(top_ids, lean=lean_context), turn_id, followup=True)))
             err = None
         except Exception as e:  # noqa: BLE001
             answer, err = "", f"{type(e).__name__}: {e}"
@@ -1564,7 +1650,7 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
                       or empty_field_answer(question, top_ids)
                       or call_gemma(build_prompt(
                           memory, recent_pairs, question,
-                          rag_context(top_ids, total_matches), turn_id)))
+                          rag_context(top_ids, total_matches, lean=lean_context), turn_id)))
             err = None
         except Exception as e:  # noqa: BLE001
             answer, err = "", f"{type(e).__name__}: {e}"

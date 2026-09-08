@@ -9,6 +9,7 @@ import sys as _sys
 from pathlib import Path as _P
 _sys.path.insert(0, str(_P(__file__).resolve().parent))
 import card_fingerprint as _cfp
+import argparse
 import json
 import math
 import os
@@ -906,6 +907,81 @@ NO_RESULT_REGION_CANDIDATES = [
 ]
 
 
+# 그럴듯한 이름을 만들 때 쓰는 흔한 이름. 실존 카드의 **성**에 붙여서, 있을 법한데
+# 코퍼스에는 없는 사람을 만든다(멀티턴 벤치의 absent 유형과 같은 방식).
+PLAUSIBLE_GIVEN = ["도현", "서준", "지호", "예준", "하준", "주원", "지후", "준서",
+                   "서연", "지우", "하은", "서윤", "지유", "채원", "수아", "다은"]
+
+
+def build_hard_negative_queries(cards, rng, per_kind=5):
+    """
+    **그럴듯한데 없는 것들**(hard negative)로 기권을 시험한다.
+
+    기존 기권 셋 20개 중 16개는 한눈에 가짜다("우주비행사", "zzzz@zzzz.zzz").
+    그건 "가짜를 가짜로 아는가" 만 재고, 정작 우리가 실제로 틀렸던 것 —
+    **비슷한 것으로 때우지 않는가** — 는 못 잰다(코드 주석에 "서커스 단장" 이
+    우연히 정답 처리된 기록이 남아 있다). 일반 검색 벤치의 기권 시험은 전부
+    hard negative 로 만든다.
+
+    세 갈래를 만들고, 만들 때마다 **코퍼스에 정말 없는지 확인**한다. 추측으로 넣으면
+    정답이 있는 질의를 '정답 0개' 로 라벨링하는 사고가 난다.
+      · 있을 법한 사람 이름  — 실존 성 + 흔한 이름
+      · 실재 회사와 한 글자 다른 회사명
+      · 실재 지역 + 실재 직함인데 그 조합은 0명
+    """
+    names = {(c.get("name") or "").strip() for c in cards}
+    companies = {(c.get("company") or "").strip() for c in cards if (c.get("company") or "").strip()}
+    surnames = sorted({n[0] for n in names if len(n) >= 2})
+    out = []
+
+    made = set()
+    while len(made) < per_kind and len(made) < 200:
+        cand = rng.choice(surnames) + rng.choice(PLAUSIBLE_GIVEN)
+        if cand not in names and cand not in made:
+            made.add(cand)
+            out.append(("기권(그럴듯한 부재)", f"{cand}씨 연락처 알려줘", []))
+
+    # 회사명 한 글자 바꾸기. 바꾼 결과가 다른 실재 회사와 같아지면 버린다.
+    swapped = set()
+    pool = sorted(companies)
+    for _ in range(400):
+        if len(swapped) >= per_kind:
+            break
+        base = rng.choice(pool)
+        core = [w for w in base.split() if w not in COMPANY_STOPWORDS and len(w) >= 3]
+        if not core:
+            continue
+        word = core[-1]
+        i = rng.randrange(len(word))
+        # 한글 한 글자를 이웃 음절로 민다 — 형태는 그대로 두고 글자만 다르게.
+        ch = chr(ord(word[i]) + 1) if "가" <= word[i] <= "힣" else word[i]
+        cand = word[:i] + ch + word[i + 1:]
+        if cand == word or cand in swapped:
+            continue
+        if any(cand in c for c in companies):
+            continue
+        swapped.add(cand)
+        out.append(("기권(그럴듯한 부재)", f"{cand} 다니는 사람 찾아줘", []))
+
+    # 실재 지역 + 실재 직함인데 그 조합은 0명.
+    sido, titles = set(), set()
+    have = set()
+    for c in cards:
+        addr = (c.get("address") or "").strip()
+        region = addr.split()[0] if addr else ""
+        title = (c.get("title") or "").strip()
+        if region:
+            sido.add(region)
+        if title:
+            titles.add(title)
+        if region and title:
+            have.add((region, title))
+    empty = sorted({(r, t) for r in sido for t in titles} - have)
+    for r, t in rng.sample(empty, min(per_kind, len(empty))):
+        out.append(("기권(그럴듯한 부재)", f"{r}에 있는 {t} 찾아줘", []))
+    return out
+
+
 def build_eval_queries(cards, rng, include_concept=True, include_no_result=True):
     """
     합성 데이터 필드에서 정답이 확정되는 질의를 자동 생성한다.
@@ -937,17 +1013,47 @@ def build_eval_queries(cards, rng, include_concept=True, include_no_result=True)
         queries.append(("회사명", core, relevant))
     for name in rng.sample(sorted(by_name), 40):
         queries.append(("이름", name, by_name[name]))
-    phone_cards = rng.sample(cards, 30)
-    for c in phone_cards:
-        digits = "".join(ch for ch in c["phone"] if ch.isdigit())
-        if len(digits) >= 8:
-            frag = digits[3:]
-            relevant = [x["id"] for x in cards if frag in "".join(ch for ch in x["phone"] if ch.isdigit())]
-            queries.append(("전화(하이픈X)", frag, relevant))
+    # **전화는 말투가 셋이다.** 예전에는 하이픈 없는 가운데 8자리(digits[3:]) 하나만
+    # 썼는데, 실제 사용자는 그렇게 치지 않는다 — 전체를 붙여넣거나("010-1234-5678"),
+    # 뒷 8자리를 하이픈째 말하거나("1234-5678"), 뒷 4자리만 기억한다("5678").
+    # 한 말투만 시험하면 나머지 둘이 깨져도 지표가 안 움직인다.
+    #
+    # 뒷 4자리는 1000장 안에서 충돌이 나 정답이 여럿이 된다 — 그래서 이 갈래만
+    # 진짜 랭킹 시험이 되고, 나머지 둘은 조회에 가깝다.
+    def digits_of(card):
+        return "".join(ch for ch in card["phone"] if ch.isdigit())
+
+    for c in rng.sample(cards, 30):
+        digits = digits_of(c)
+        if len(digits) < 8:
+            continue
+        for kind, q, frag in (
+            ("전화(전체)", c["phone"], digits),
+            ("전화(뒷8자리)", f"{digits[-8:-4]}-{digits[-4:]}", digits[-8:]),
+            ("전화(뒷4자리)", digits[-4:], digits[-4:]),
+        ):
+            relevant = [x["id"] for x in cards if digits_of(x).endswith(frag)]
+            queries.append((kind, q, relevant))
     pairs = [k for k, v in by_loc_title.items() if v]
     for loc, title in rng.sample(sorted(pairs), 40):
         q = f"{loc}에 있는 {title} 찾아줘"  # 조사·명령어 처리까지 함께 검증
-        queries.append(("지역+직함(문장)", q, by_loc_title[(loc, title)]))
+        queries.append(("지역+직함(주소수준)", q, by_loc_title[(loc, title)]))
+
+    # **시·도 수준 지역**. 위의 주소 수준("광주광역시 남구")은 직함과 겹치면 정답이
+    # 1장으로 떨어져 사실상 식별자 조회다 — 그래서 R@5 가 1.000 이었다. 사람은
+    # "광주 사장" 이라고 말하고, 그러면 정답이 여럿이라 **순위가 문제**가 된다.
+    # 정답 3명 이상인 조합만 쓴다(2명 이하는 여전히 조회에 가깝다).
+    by_sido_title = defaultdict(list)
+    for c in cards:
+        addr = (c.get("address") or "").strip()
+        region = addr.split()[0] if addr else ""
+        title = (c.get("title") or "").strip()
+        if region and title and has_hangul(title):
+            by_sido_title[(region, title)].append(c["id"])
+    plural = sorted(k for k, v in by_sido_title.items() if len(v) >= 3)
+    for region, title in rng.sample(plural, min(40, len(plural))):
+        q = f"{region}에 있는 {title} 찾아줘"
+        queries.append(("지역+직함(시도수준)", q, by_sido_title[(region, title)]))
 
     if include_concept:
         for q, difficulty, predicate in CONCEPT_QUERIES:
@@ -964,6 +1070,9 @@ def build_eval_queries(cards, rng, include_concept=True, include_no_result=True)
             exists = any(region in (c.get("address") or "") or region in (c.get("location") or "") for c in cards)
             if not exists:
                 queries.append(("기권(정답없음)", q, []))
+        # 유형을 나눠서 낸다. 합치면 "한눈에 가짜" 16개가 분모를 채워 진짜 어려운
+        # 쪽의 실패를 가린다 — 헤드라인 기권 정확도가 실제보다 좋게 보인다.
+        queries.extend(build_hard_negative_queries(cards, rng))
     return queries
 
 
@@ -1000,22 +1109,30 @@ def audit_queries(cards, queries):
         rate = leak_hit / leak_total
         print(f"  개념형 문자 누출률 = {leak_hit}/{leak_total} = {rate:.1%} (낮아야 정상 — 높으면 키워드로도 풀려버림)")
 
-    # 기권 질의 라벨 검증: 질의의 핵심 토큰이 카드에 실제로 있으면 '정답 0개' 라벨이 의심스럽다.
+    # 기권 질의 라벨 검증: '정답 0개' 라고 라벨했는데 실제로는 맞는 카드가 있는가.
     # (실제로 "제주특별자치도 변호사"를 기권으로 잘못 넣었다가 변호사 5명이 있는 것을 발견했다)
+    #
+    # **토큰 하나씩이 아니라 토큰 전부를 함께 본다.** 예전에는 토큰 하나라도 카드에
+    # 있으면 의심으로 찍었는데, 그러면 "광주광역시에 있는 대표이사"(광주에 대표이사가
+    # 0명인 조합)가 '대표이사가 17장에 있다'는 이유로 걸린다 — 조합이 없다는 게 바로
+    # 이 질의의 요점인데도. 헛경보가 쌓이면 진짜 오라벨이 그 속에 묻힌다.
+    # 한 카드가 토큰을 **전부** 담고 있을 때만 의심한다.
     suspicious = []
     for t, q, rel in queries:
         if not t.startswith("기권") or rel:
             continue
         toks = [x for x in normalize(q).split() if len(x) >= 3 and x not in STOPWORDS]
-        for tok in toks:
-            hits = sum(1 for c in cards if tok in card_original_text(c))
-            if hits > 0:
-                suspicious.append((q, tok, hits))
+        if not toks:
+            continue
+        for c in cards:
+            text = card_original_text(c)
+            if all(tok in text for tok in toks):
+                suspicious.append((q, " + ".join(toks), c["id"]))
                 break
     if suspicious:
-        print(f"  ! 기권 라벨 의심 {len(suspicious)}건 (질의 토큰이 카드에 실제 존재):")
-        for q, tok, hits in suspicious[:6]:
-            print(f"      '{q}' -> 토큰 '{tok}' 이 {hits}장에 존재")
+        print(f"  ! 기권 라벨 의심 {len(suspicious)}건 (한 카드가 질의 토큰을 전부 담고 있다):")
+        for q, tok, cid in suspicious[:6]:
+            print(f"      {q!r} -> 카드 {cid} 가 {tok} 를 전부 담고 있다")
     else:
         print("  기권 라벨 검증 통과 (질의 토큰이 카드에 존재하지 않음)")
 
@@ -1164,15 +1281,66 @@ def evaluate_no_result(name, rankings, queries, score_lists=None):
     if not queries:
         return
     correct = 0
-    for (_, _, relevant), ranked in zip(queries, rankings):
+    by_kind = defaultdict(lambda: [0, 0])
+    misses = []
+    for (kind, q, relevant), ranked in zip(queries, rankings):
         assert not relevant, "no-result 평가에는 정답이 비어있는 질의만 넣어야 한다"
+        cell = by_kind[kind]
+        cell[1] += 1
         if not ranked:
             correct += 1
+            cell[0] += 1
+        else:
+            misses.append((kind, q))
     print(f"\n[{name}] 기권 정확도(no-result accuracy) = {correct}/{len(queries)} = {correct/len(queries):.3f}")
+    # **유형을 나눠서 본다.** 합쳐 놓으면 한눈에 가짜인 질의들이 분모를 채워서
+    # 진짜 어려운 쪽(그럴듯한 부재)의 실패를 가린다.
+    for kind in sorted(by_kind):
+        ok, n = by_kind[kind]
+        print(f"    {kind:<18} {ok}/{n} = {ok / n:.3f}")
+    if misses:
+        # 무엇에 걸렸는지 보이게 전부 찍는다. 숫자만 보면 "무엇을 고쳐야 하나" 에
+        # 답이 안 나온다 — 실패 질의가 곧 할 일 목록이다.
+        print(f"    ! 때운 질의 {len(misses)}개:")
+        for kind, q in misses:
+            print(f"        [{kind}] {q}")
     print("  * 0.000 이면 '없는 것을 없다고 말하지 못한다'는 뜻 — 점수 컷오프/필드 필터 미구현 상태를 반영")
 
 
+DEFAULT_BENCH = "bench/hjp_search_v1.json"
+
+
+def load_frozen_queries(path, cards):
+    """
+    동결본을 읽는다. **여기서 질의를 만들지 않는다** — 시험지와 채점기를 분리해야
+    시험지를 안 건드린 채로 채점 기준만 고칠 수 있고, 반대도 된다.
+
+    카드 지문을 대조한다. 카드가 바뀐 뒤 옛 동결본을 돌리면 정답 id 가 다른 사람을
+    가리킬 수 있는데, id 는 그대로라 다른 검사로는 안 잡힌다.
+    """
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    print(f"{payload['dataset_version']}  (동결 {payload.get('built_at') or '시각 없음'}, "
+          f"시드 {payload['seed']})")
+    now = _cfp.answer_fingerprint(cards)
+    if payload.get("cards_fingerprint") and payload["cards_fingerprint"] != now:
+        print(f"  [중단] 카드가 동결 시점과 다르다 — 동결본 {payload['cards_fingerprint'][:16]}… "
+              f"vs 지금 {now[:16]}…")
+        print("         정답 id 가 다른 사람을 가리킬 수 있다. 시험지를 다시 찍을 것"
+              "(scripts/build_search_bench.py).")
+        raise SystemExit(2)
+    return [(q["kind"], q["query"], q["relevant"]) for q in payload["queries"]]
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--bench", default=DEFAULT_BENCH,
+                    help="동결된 질의셋. 이걸 읽고 여기서 질의를 만들지 않는다")
+    ap.add_argument("--regenerate", action="store_true",
+                    help="동결본을 무시하고 즉석 생성한다. **동결본을 새로 찍기 전에 "
+                         "미리 보는 용도**이지 평가용이 아니다 — 이걸로 낸 숫자는 "
+                         "다른 실행과 비교할 수 없다")
+    args = ap.parse_args()
+
     rng = random.Random(42)
     cards = json.loads(CARDS_PATH.read_text(encoding="utf-8"))
     # 벡터가 지금 카드와 맞는지 먼저 본다. 안 맞으면 시맨틱이 옛날 내용으로
@@ -1197,7 +1365,11 @@ def main():
     gazetteer = Gazetteer(cards)
     print(f"가제티어: 지역 {len(gazetteer.locations)}종, 직함 {len(gazetteer.titles)}종, 회사 {len(gazetteer.companies)}종")
 
-    queries = build_eval_queries(cards, rng)
+    if args.regenerate:
+        print("  [주의] 즉석 생성 — 이 숫자는 다른 실행과 비교하지 말 것")
+        queries = build_eval_queries(cards, rng)
+    else:
+        queries = load_frozen_queries(args.bench, cards)
     print(f"질의 {len(queries)}개 생성 (정답은 합성 데이터 필드에서 자동 유도)")
     audit_queries(cards, queries)
 
@@ -1254,6 +1426,20 @@ def main():
     )
     for label, rankings in systems:
         evaluate(label, pick(rankings, rank_idx), rank_queries)
+
+    # **식별자를 뺀 값을 병기한다.** 이름·회사명·전화는 정답 문자열이 카드에 그대로
+    # 있어서 검색이 아니라 조회다(BEIR·MS MARCO 같은 일반 검색 벤치에는 이 유형이
+    # 아예 없다). 그런데 이 셋이 질의의 절반이 넘고 전부 만점이라, 헤드라인 R@5 는
+    # 그 만점에 희석된 값이다. 진짜 시험은 개념형과 지역+직함이다.
+    IDENTIFIER = ("이름", "회사명", "전화")
+    concept_idx = [i for i in rank_idx
+                   if not queries[i][0].startswith(IDENTIFIER)]
+    if concept_idx:
+        print("\n" + "=" * 70)
+        print(f"[식별자 제외]  이름·회사명·전화를 뺀 {len(concept_idx)}질의 — "
+              f"이쪽이 '검색' 이다")
+        for label, rankings in systems:
+            evaluate(label, pick(rankings, concept_idx), pick(queries, concept_idx))
 
     if nores_idx:
         nores_queries = pick(queries, nores_idx)

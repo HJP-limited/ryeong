@@ -70,7 +70,15 @@ ENDPOINT = "http://127.0.0.1:8100/chat"
 SEED = 42
 
 # 답변이 "못 찾았다"고 말하는 표현 — 답이 있어야 하는 턴에서는 금지어다.
-REJECTIONS = ["찾지 못했", "찾을 수 없", "없습니다만", "해당하는 명함"]
+# 거절로 인정하는 표현. **세 곳이 서로 달랐다** — 여기, build_bench, Kotlin
+# REJECTION_MARKERS. 같은 판정을 세 군데서 따로 적으면 반드시 어긋난다.
+# build_bench 는 이제 이 목록을 가져다 쓴다.
+#
+# 뒤 여섯 개는 --no-bypass 절제 실험에서 관측한 것이다: 모델이 옳게 거절했는데
+# ("주소 정보가 명함에 없습니다") 목록에 없어서 실패로 찍혔다. 우회가 켜져 있으면
+# 거절 문구가 결정적으로 고정되어 이 구멍이 안 보인다.
+REJECTIONS = ["찾지 못했", "찾을 수 없", "없습니다만", "해당하는 명함",
+              "명함에 없", "컨텍스트에 없", "정보가 없", "정보는 없", "등록되어 있지 않", "확인할 수 없"]
 
 # 생성이 실제로 일어나는 경로. 체크리스트는 여기에만 매긴다.
 # empty_result 도 LLM 을 부른다(후보가 0장인 채로 프롬프트가 들어간다).
@@ -143,6 +151,19 @@ ASK_DEPARTMENT_NAMED = [
 ]
 ASK_ONLY_NAME = ["{n}씨는?", "{n}씨도?", "{n}씨는 어때?", "그럼 {n}씨는?"]
 
+# 이름을 대지 않고 **앞서 물었던 사람**으로 돌아간다. 대화 순서를 기억해야 풀린다.
+BACK_TO_FIRST = {
+    "department": ["처음 물어본 사람 부서는?", "아까 그 사람 부서는?",
+                   "먼저 물어본 사람 부서 알려줘", "첫 번째로 물어본 사람 부서는?"],
+    "address": ["처음 물어본 사람 주소는?", "아까 그 사람 주소 알려줘",
+                "먼저 물어본 사람 주소는?", "첫 번째로 물어본 사람 주소가 어떻게 돼?"],
+}
+# 두 사람이 화제에 오른 뒤 조건으로 하나를 고른다.
+PICK_OF_TWO = ["둘 중에 {t}인 사람은?", "둘 중 누가 {t}야?",
+               "그 둘 중에 {t} 알려줘", "방금 두 사람 중에 {t}는 누구야?"]
+# 앞 결과 안에서 한 번 더 좁힌다(3단 누적의 2턴째).
+NARROW_MORE = ["그중에 {t}만", "거기서 {t}만 보여줘", "그중에 {t}인 사람", "그 안에서 {t}만"]
+
 # 주어를 생략한 후속. 속성 명사로 시작해야 focus 가 앞에 붙는다(resolveSearchQuery).
 ELLIPTIC = {
     "address": ["주소는?", "주소 알려줘", "주소가 어떻게 돼?", "주소는 뭐야?"],
@@ -172,7 +193,7 @@ def pick(rng, pool, **kw):
 
 
 # ---------------------------------------------------------------------------
-# 날조 값 검사 — 답변에 **어느 카드에도 없는** 연락처가 나오는지 본다.
+# 미등록 연락처 검사 — 답변에 **어느 카드에도 없는** 연락처가 나오는지 본다.
 #
 # 고정셋의 forbidden_contains 는 '그 대화에 나온 다른 사람 값'을 **수작업으로 열거**한
 # 것이라, 목록에 없는 값이나 완전히 지어낸 값은 못 잡는다.
@@ -199,7 +220,7 @@ def build_contact_index(cards):
     return emails, phones
 
 
-def fabricated_contacts(answer, emails, phones):
+def unregistered_contacts(answer, emails, phones):
     """답변에서 뽑은 연락처 중 데이터에 없는 것들."""
     out = []
     for m in _EMAIL_RE.findall(answer or ""):
@@ -207,7 +228,7 @@ def fabricated_contacts(answer, emails, phones):
             out.append(m)
     for m in _PHONE_RE.findall(answer or ""):
         digits = re.sub(r"\D", "", m)
-        # 뒷자리만 답하는 정상 응답("뒤 4자리는 4312")을 날조로 보지 않는다.
+        # 뒷자리만 답하는 정상 응답("뒤 4자리는 4312")을 미등록으로 보지 않는다.
         if len(digits) < 9:
             continue
         if digits not in phones and not any(digits in p for p in phones):
@@ -234,7 +255,7 @@ def fabricated_contacts(answer, emails, phones):
 #   왜 타당한가: RAGAS 논문도 주장 분해가 가장 불안정한 단계라고 적는다. 우리 답변은
 #              분해가 필요 없을 만큼 짧고 정형이라, 판정자 모델 없이 재현 가능하게 잰다.
 #   한계:      데이터에 없는 회사명을 지어내면 못 잡는다(색인이 없으므로). 전화·이메일
-#              날조는 정규식으로 잡힌다. 직함·이름은 주장으로 세지 않는다.
+#              미등록 연락처는 정규식으로 잡힌다. 직함·이름은 주장으로 세지 않는다.
 #
 # ── Answer Relevancy ────────────────────────────────────────────────────────
 #   표준 정의:  답변이 질문에 얼마나 부합하는가. 불완전하거나 딴소리면 낮다.
@@ -243,7 +264,7 @@ def fabricated_contacts(answer, emails, phones):
 #     · 속성을 물었으면:  요청 필드마다 **그 유형의 값**(전화·이메일은 정규식, 회사·부서·
 #                       주소·직함은 데이터에 실재하는 값)이 답변에 있나. 점수 = |답한 필드| / |요청 필드|
 #                       컨텍스트 안인지는 **보지 않는다** — 그건 충실성의 몫이다. 남의 회사를
-#                       답하면 관련성 1 · 충실성 0, 날조 번호면 관련성 1 · 충실성 0 으로 갈려야
+#                       답하면 관련성 1 · 충실성 0, 미등록 번호면 관련성 1 · 충실성 0 으로 갈려야
 #                       세 층이 서로 다른 것을 잰다(처음엔 컨텍스트로 쟀다가 둘이 겹쳐서 고쳤다).
 #     · 속성 없는 질문(누구 찾기): 컨텍스트 카드 이름이 하나라도 답변에 있나.
 #     · 정답이 있는데 거절 문구로 답하면 0(질문을 다루지 않았다).
@@ -452,7 +473,7 @@ def rescore_from_dump(path, cards):
     rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
     contacts = build_contact_index(cards)
     vi = build_value_index(cards)
-    rel_hit = rel_n = f_ok = f_n = f_turns = f_bad = noclaim = fab_bad = llm = 0
+    rel_hit = rel_n = f_ok = f_n = f_turns = f_bad = noclaim = unreg_bad = llm = 0
     fails = []
     prev_fields, prev_key = None, None
     for r in rows:
@@ -478,13 +499,13 @@ def rescore_from_dump(path, cards):
                 fails.append((r["kind"], r["depth"], r["q"], f"충실성: {bad[0]} / 답변={answer[:40]!r}"))
         else:
             noclaim += 1
-        if fabricated_contacts(answer, contacts[0], contacts[1]):
-            fab_bad += 1
+        if unregistered_contacts(answer, contacts[0], contacts[1]):
+            unreg_bad += 1
     print(f"\n재채점 — {path}  (LLM 턴 {llm}개, 생성 없음)")
     print(f"  답변 관련성(Relevancy)   {rel_hit / max(rel_n, 1):.3f}  ({rel_hit}/{rel_n} 요청 필드)")
     print(f"  답변 충실성(Faithfulness) {f_ok / max(f_n, 1):.3f}  ({f_ok}/{f_n} 주장 · 턴 {f_turns}개, "
           f"컨텍스트 밖 값 있는 턴 {f_bad}개, 주장 0건 {noclaim}개)")
-    print(f"  연락처 날조 없음         {(llm - fab_bad) / max(llm, 1):.3f}  ({llm - fab_bad}/{llm})")
+    print(f"  미등록 연락처 없음         {(llm - unreg_bad) / max(llm, 1):.3f}  ({llm - unreg_bad}/{llm})")
     print(f"\n[실패 {len(fails)}건]")
     for k, d, q, why in fails:
         print(f"  [{k}] {d}턴  {q}\n      {why}")
@@ -529,7 +550,11 @@ def build_scenarios(cards, rng):
         return {"focus": c["name"], "names": [c["name"]], "titles": [], "locations": []}
 
     # (1) 이름 지목 -> 속성 생략형 후속 (4턴) — focus 이어짐 + 카드 유지
-    for c in pool[:25]:
+    #
+    # **25 -> 10 으로 줄였다.** 이 유형은 "대상 그대로, 칸만 바꿔 묻기" 라 후속 턴 중
+    # 가장 쉽다. 100턴이나 차지하면서(전체의 26%) 평균을 끌어올렸다. 회귀 감지에는
+    # 10개면 충분하다 — 깨지면 10개가 한꺼번에 깨진다.
+    for c in pool[:10]:
         gold, slots = [c["id"]], person_slots(c)
         add("이름+생략형후속", [
             turn(pick(rng, ASK_COMPANY, n=c["name"]), "search", slots, gold,
@@ -543,7 +568,11 @@ def build_scenarios(cards, rng):
         ])
 
     # (2) 6턴 장문 — 최근 창(메시지 8개 = 4턴)을 넘겨 historyDigest 로 접히는 구간
-    for c in pool[25:35]:
+    #
+    # **10 -> 5 로 줄였다.** 긴 문맥 유지 자체는 재야 하지만, 이 유형은 focus 가 한 번도
+    # 안 바뀌어서 **깊어질수록 쉬워진다**(3턴째+ 지표를 부풀린 주범). 대상이 바뀌는
+    # 6턴은 아래 '6턴 전환형' 으로 따로 잰다.
+    for c in pool[25:30]:
         gold, slots = [c["id"]], person_slots(c)
         tail = re.sub(r"\D", "", c.get("phone") or "")[-4:]
         add("6턴 장문", [
@@ -679,12 +708,22 @@ def build_scenarios(cards, rng):
         ])
 
     # (11) 사실 정정 — 같은 key 를 덮어써야 한다(옛 값이 남으면 안 된다)
-    add("사실 정정", [
-        turn("내 회사는 블루오션이야"),
-        turn("내 회사는 한빛테크야"),
-        turn("아까 말한 내 회사 뭐였지", "context_answer",
-             must=[["한빛테크"]], must_not=["블루오션"]),
-    ])
+    # **1개 -> 4개.** 정정 말투가 여러 가지인데 하나만 시험하고 있었다.
+    CORRECTIONS = [
+        ("내 회사는 블루오션이야", "내 회사는 한빛테크야", "아까 말한 내 회사 뭐였지"),
+        ("내 회사는 정진푸드야", "아니 정진푸드 말고 성진화학이야", "내 회사 어디라고 했지?"),
+        ("내 부서는 영업팀이야", "내 부서는 기획팀이야", "내 부서 뭐였지?"),
+        ("내 이름은 김철수야", "아니 김철수가 아니라 김철호야", "내 이름 뭐라고 했지?"),
+    ]
+    for first, second, recall in CORRECTIONS:
+        # 두 번째 발화에서 정본 값을 뽑는다 — 마지막 명사구가 새 값이다.
+        new_value = second.split()[-1].rstrip("이야").rstrip("야").strip()
+        old_value = first.split()[-1].rstrip("이야").rstrip("야").strip()
+        add("사실 정정", [
+            turn(first),
+            turn(second),
+            turn(recall, "context_answer", must=[[new_value]], must_not=[old_value]),
+        ])
 
     # (12) 도구 범위 밖 — 명함으로 답할 수 없는 요청. 지금은 "명함을 들이밀지 않는다"를
     #      재고, 캘린더/문자 도구가 붙으면 이 자리가 "그 도구로 라우팅돼야 한다"로 바뀐다.
@@ -776,27 +815,147 @@ def build_scenarios(cards, rng):
     # (18) 조건 누적(점진적 좁히기) — "대전에 있는 사람" -> "그중에 변호사만" 에서
     #      앞 턴의 지역 조건이 사라져 전국 변호사가 나왔다(알려진 간극이었다).
     #      applyNarrowing 으로 앞 턴 조건어를 이어 붙여 해결했고, 회귀 방지로 남긴다.
-    loc_for_narrow = "대전"
-    narrow_ids = [c["id"] for c in cards
-                  if loc_for_narrow in (c.get("address") or "")
-                  and "변호사" in norm_tokens(c.get("title"))]
-    add("조건 누적", [
-        turn(f"{loc_for_narrow}에 있는 사람 찾아줘", "search",
-             {"names": [], "titles": [], "locations": [loc_for_narrow]}, None),
-        turn("그중에 변호사만", "search",
-             {"names": [], "titles": ["변호사"], "locations": [loc_for_narrow]},
-             narrow_ids or None),
-    ])
+    # **1쌍 -> 6쌍으로 늘렸다.** n=2(턴 2개)로는 통과해도 '안 깨졌다'조차 말할 수 없다.
+    narrow_pairs = [(loc, t, ids) for (loc, t), ids in combos.items() if 2 <= len(ids) <= 20][:6]
+    for loc_for_narrow, narrow_title, narrow_ids in narrow_pairs:
+        add("조건 누적", [
+            turn(f"{loc_for_narrow}에 있는 사람 찾아줘", "search",
+                 {"names": [], "titles": [], "locations": [loc_for_narrow]}, None),
+            turn(pick(rng, NARROW_MORE, t=narrow_title), "search",
+                 {"names": [], "titles": [narrow_title], "locations": [loc_for_narrow]},
+                 narrow_ids or None),
+        ])
 
     # (19) 순서 지시("두 번째 사람") — 직전 집합에서 하나를 고르는 발화.
     #      미구현일 때는 새 검색으로 빠져 무관한 사람이 나왔다(알려진 간극이었다).
-    order_ids = [c["id"] for c in cards
-                 if "대전" in (c.get("address") or "") and "변호사" in norm_tokens(c.get("title"))]
-    if len(order_ids) >= 2:
+    # **1쌍 -> 5쌍.** 순서를 가리키는 말투도 함께 다양화한다 — 한 말투만 되는 것을
+    # "된다"고 말하면 안 된다(실측: 말투 하나가 안 돼 대화가 통째로 무너진 적이 있다).
+    ORDINAL = [("두 번째 사람 연락처", 1), ("첫 번째 사람 부서는?", 0),
+               ("두 번째 분 회사 알려줘", 1), ("마지막 사람 주소는?", -1),
+               ("첫 번째로 나온 사람 이메일", 0)]
+    order_pairs = [(loc, t, ids) for (loc, t), ids in combos.items() if 2 <= len(ids) <= 6][:5]
+    for (loc_o, t_o, order_ids), (ordinal_q, ordinal_i) in zip(order_pairs, ORDINAL):
         add("순서 지시", [
-            turn("대전에 있는 변호사 찾아줘", "search",
-                 {"names": [], "titles": ["변호사"], "locations": ["대전"]}, order_ids),
-            turn("두 번째 사람 연락처", "followup", None, [order_ids[1]]),
+            turn(pick(rng, SEARCH_LOC_TITLE, loc=loc_o, t=t_o), "search",
+                 {"names": [], "titles": [t_o], "locations": [loc_o]}, order_ids),
+            turn(ordinal_q, "followup", None, [order_ids[ordinal_i]]),
+        ])
+
+    # ------------------------------------------------------------------
+    # (20~24) 어려운 유형 보강.
+    #
+    # 실측으로 드러난 문제: 후속 턴 247개 중 **149개(60%)가 "대상 그대로, 칸만 바꿔
+    # 묻기"** 였고, 정작 어려운 유형은 표본이 1~2개였다(조건 누적 2 · 순서 지시 2 ·
+    # 사실 정정 1). n=1 은 통계가 아니라 일화라 통과해도 '안 깨졌다' 조차 말할 수 없다.
+    # 아래 다섯을 넣어 어려운 쪽 표본을 올린다.
+    # ------------------------------------------------------------------
+
+    # (20) 되돌아오기(무명 지시) — A -> B 로 갔다가 **이름 없이** A 로 돌아온다.
+    #      '주제 전환' 은 3턴째에 A 를 다시 이름으로 부르지만 여기서는 안 부른다.
+    #      대화 순서를 기억해야만 풀린다(resolve_discourse_reference).
+    for a, b in zip(pool[90:97], pool[97:104]):
+        field = "department" if a.get("department") else "address"
+        want = [a["department"]] if field == "department" else address_variants(a["address"])
+        add("되돌아오기(무명)", [
+            turn(pick(rng, ASK_COMPANY, n=a["name"]), "search", person_slots(a), [a["id"]],
+                 must=[company_variants(a["company"])], must_not=REJECTIONS),
+            turn(pick(rng, ASK_ONLY_NAME, n=b["name"]), "search", person_slots(b), [b["id"]],
+                 must=[company_variants(b["company"])], must_not=REJECTIONS),
+            turn(pick(rng, BACK_TO_FIRST[field]), "search", None, [a["id"]],
+                 must=[want], must_not=REJECTIONS),
+        ])
+
+    # (21) 둘 중 고르기 — 두 사람이 화제에 오른 뒤 조건으로 한 명을 고른다.
+    #      직함이 서로 겹치지 않는 쌍만 쓴다(정답이 하나로 정해져야 한다).
+    #      상대 이름이 답에 나오면 실패다 — must_not 으로 못 박는다.
+    picked = 0
+    for a, b in zip(pool[104:120], pool[120:136]):
+        ta = set(norm_tokens(a.get("title")))
+        tb = set(norm_tokens(b.get("title")))
+        only_a = [t for t in sorted(ta - tb) if len(t) >= 2]
+        if not only_a:
+            continue
+        add("둘 중 고르기", [
+            turn(pick(rng, ASK_COMPANY, n=a["name"]), "search", person_slots(a), [a["id"]],
+                 must=[company_variants(a["company"])], must_not=REJECTIONS),
+            turn(pick(rng, ASK_ONLY_NAME, n=b["name"]), "search", person_slots(b), [b["id"]],
+                 must=[company_variants(b["company"])], must_not=REJECTIONS),
+            turn(pick(rng, PICK_OF_TWO, t=only_a[0]), "search", None, [a["id"]],
+                 must=[[a["name"]]], must_not=REJECTIONS + [b["name"]]),
+        ])
+        picked += 1
+        if picked >= 7:
+            break
+
+    # (22) 3단 누적 — 좁히기를 **두 번** 연달아 한다. 2단은 통과하는데 3단에서 앞 조건이
+    #      새는지 본다(2단만 재면 못 보는 결함이다. 실제로 2단에서 지역이 샌 적이 있다).
+    three = []
+    for (loc, t1), ids in combos.items():
+        if not (3 <= len(ids) <= 30):
+            continue
+        subs = Counter()
+        for cid in ids:
+            for t2 in norm_tokens(by_id_all[cid].get("title")):
+                if t2 != t1 and len(t2) >= 2:
+                    subs[t2] += 1
+        for t2, n2 in subs.most_common():
+            if 1 <= n2 < len(ids):
+                final = [cid for cid in ids
+                         if t2 in norm_tokens(by_id_all[cid].get("title"))]
+                three.append((loc, t1, t2, ids, final))
+                break
+        if len(three) >= 6:
+            break
+    for loc, t1, t2, ids, final in three:
+        add("3단 누적", [
+            turn(pick(rng, SEARCH_LOC_TITLE, loc=loc, t=t1), "search",
+                 {"names": [], "titles": [t1], "locations": [loc]}, ids, must_not=REJECTIONS),
+            turn(pick(rng, NARROW_MORE, t=t2), "search",
+                 {"names": [], "titles": [t1, t2], "locations": [loc]}, final,
+                 must_not=REJECTIONS),
+            turn(pick(rng, PLURAL_FOLLOWUP), "followup", None, final, must_not=REJECTIONS),
+        ])
+
+    # (23) 모호 지시 — 두 명이 나온 뒤 "그 사람" 이라고 하면 **누구인지 정해지지 않는다.**
+    #      바라는 동작은 '조용히 하나 고르기'가 아니라 **둘 다 답하거나 되묻기** 다.
+    #      must 를 두 묶음으로 둬서 한 명만 답하면 나머지 묶음이 안 맞아 실패로 잡힌다
+    #      (되묻는 말은 두 묶음 모두를 만족하므로 통과한다).
+    clarify = ["누구", "어느", "두 분", "두 사람", "둘 다", "모두"]
+    ambiguous_made = 0
+    for (loc, t), ids in combos.items():
+        if len(ids) != 2 or ambiguous_made >= 8:
+            continue
+        # 부서가 같으면 갈리지 않아 시험이 안 된다 — 회사로 바꿔 물어 표본을 살린다.
+        for field, ask in (("department", "그 사람 부서는?"), ("company", "그 사람 회사는?")):
+            v0 = (by_id_all[ids[0]].get(field) or "").strip()
+            v1 = (by_id_all[ids[1]].get(field) or "").strip()
+            if v0 and v1 and v0 != v1:
+                add("모호 지시", [
+                    turn(pick(rng, SEARCH_LOC_TITLE, loc=loc, t=t), "search",
+                         {"names": [], "titles": [t], "locations": [loc]}, ids,
+                         must_not=REJECTIONS),
+                    turn(ask, None, None, ids,
+                         must=[[v0] + clarify, [v1] + clarify], must_not=REJECTIONS),
+                ])
+                ambiguous_made += 1
+                break
+
+    # (24) 6턴 전환형 — 대상이 **두 번 바뀌고 한 번 돌아온다.** 기존 6턴 장문이 focus
+    #      고정이라 깊어질수록 쉬워졌던 것을 보완한다. 5·6턴째는 이름이 없다.
+    for a, b in zip(pool[136:142], pool[142:148]):
+        add("6턴 전환형", [
+            turn(pick(rng, ASK_COMPANY, n=a["name"]), "search", person_slots(a), [a["id"]],
+                 must=[company_variants(a["company"])], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["department"]), "search", person_slots(a), [a["id"]],
+                 must=[[a["department"]]], must_not=REJECTIONS),
+            turn(pick(rng, ASK_ONLY_NAME, n=b["name"]), "search", person_slots(b), [b["id"]],
+                 must=[company_variants(b["company"])], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["address"]), "search", person_slots(b), [b["id"]],
+                 must=[address_variants(b["address"])], must_not=REJECTIONS),
+            turn(pick(rng, BACK_TO_FIRST["address"]), "search", None, [a["id"]],
+                 must=[address_variants(a["address"])], must_not=REJECTIONS),
+            turn(pick(rng, ELLIPTIC["title"]), "search", None, [a["id"]],
+                 must=[[a["title"]]], must_not=REJECTIONS),
         ])
 
     return scenarios
@@ -888,13 +1047,13 @@ def run_pass(scenarios, dry_run, stats, failures, gap_failures, contacts=None,
                 break
             answer = res.get("answer") or ""
 
-            # 날조 검사 — 답변에 **어느 카드에도 없는** 연락처가 있으면 지어낸 것이다.
+            # 미등록 연락처 검사 — 답변에 **어느 카드에도 없는** 연락처가 있으면 카드에 없는 값이다.
             # 생성 모드에서만 의미가 있다(dry-run 은 답변을 만들지 않는다).
             if contacts and not dry_run and answer:
-                bogus = fabricated_contacts(answer, contacts[0], contacts[1])
-                st["fab_n"] = st.get("fab_n", 0) + 1
+                bogus = unregistered_contacts(answer, contacts[0], contacts[1])
+                st["unreg_n"] = st.get("unreg_n", 0) + 1
                 if bogus:
-                    st["fab_bad"] = st.get("fab_bad", 0) + 1
+                    st["unreg_bad"] = st.get("unreg_bad", 0) + 1
                     target_failures.append(
                         (kind, depth, t["q"], f"데이터에 없는 연락처: {bogus[0]}"))
             route = res.get("route")
@@ -1089,7 +1248,7 @@ def new_stats():
         "route_ok": 0, "route_n": 0, "jga_ok": 0, "jga_n": 0,
         "tp": 0, "fp": 0, "fn": 0,
         "hit5_ok": 0, "hit5_n": 0, "r5_sum": 0.0, "r5_n": 0, "mrr_sum": 0.0,
-        "fab_n": 0, "fab_bad": 0,
+        "unreg_n": 0, "unreg_bad": 0,
         "rel_hit": 0, "rel_n": 0,
         "faith_ok": 0, "faith_n": 0, "faith_turns": 0, "faith_bad_turns": 0, "faith_noclaim": 0,
         "chk_llm_ok": 0, "chk_llm_n": 0, "nocard_ok": 0, "nocard_n": 0, "chk_det_ok": 0, "chk_det_n": 0,
@@ -1105,7 +1264,7 @@ def new_stats():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rescore", default=None,
-                    help="--dump 로 남긴 JSONL 을 읽어 관련성·충실성·날조만 다시 잰다. 서버·생성 불필요")
+                    help="--dump 로 남긴 JSONL 을 읽어 관련성·충실성·미등록 값 생성만 다시 잰다. 서버·생성 불필요")
     ap.add_argument("--dump", default=None,
                     help="턴별 (질문·답변·컨텍스트 카드·정답) 을 JSONL 로 남긴다. 생성 없이 채점 기준만 바꿔 다시 잴 수 있게")
     ap.add_argument("--generate", action="store_true",
@@ -1222,10 +1381,10 @@ def main():
                   f"컨텍스트 밖 값 있는 턴 {stats['faith_bad_turns']}개)   * 값이 그 턴 카드 안에 있나")
             if stats["faith_noclaim"]:
                 print(f"    (주장 추출 0건이라 제외한 LLM 턴 {stats['faith_noclaim']}개)")
-        if stats.get("fab_n"):
-            ok = stats["fab_n"] - stats["fab_bad"]
-            print(f"  연락처 날조 없음        {pct(ok, stats['fab_n'])}"
-                  f"  ({ok}/{stats['fab_n']})   * 답변의 전화·이메일이 1000장 안에 실재하나")
+        if stats.get("unreg_n"):
+            ok = stats["unreg_n"] - stats["unreg_bad"]
+            print(f"  미등록 연락처 없음        {pct(ok, stats['unreg_n'])}"
+                  f"  ({ok}/{stats['unreg_n']})   * 답변의 전화·이메일이 1000장 안에 실재하나")
         if stats["nocard_n"]:
             print(f"  무관 요청 카드 억제      {pct(stats['nocard_ok'], stats['nocard_n'])}"
                   f"  ({stats['nocard_ok']}/{stats['nocard_n']}){power(stats['nocard_n'])}")

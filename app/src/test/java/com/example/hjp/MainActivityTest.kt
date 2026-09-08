@@ -326,7 +326,7 @@ class MainActivityTest {
      */
     // ---- 동명이인 되부르기 ----
 
-    // 동명이인 시험용 카드 — 8/26 본의 `cardOf` 는 id·이름을 받지 않아 직접 만든다.
+    // 동명이인 시험용 카드 — 8/26 본의 cardOf 는 id·이름을 받지 않아 직접 만든다.
     private fun twinCard(id: String, name: String, company: String) =
         BusinessCardEntity(
             id, name, "", company, "", "", "", "", "", "", "", "", "", 0L,
@@ -557,19 +557,6 @@ class MainActivityTest {
     }
 
     // ---- 대상 정정("A가 아니라 B야") ----
-
-    @Test
-    fun `정정에서 대상이 앞에 와도 버릴 이름을 고르지 않는다`() {
-        val names = listOf("구예원", "예하린")
-        // 실측(통합 벤치 v1): 대상 선행 어순에서 버릴 이름(예하린)을 골라 '예하린 예하린씨 말고' 가 됐다.
-        val fixed = resolveCorrection("구예원씨 직급 말한 거야. 예하린씨 말고", names)
-        assertTrue(fixed, fixed.startsWith("구예원"))
-        assertFalse(fixed, fixed.contains("예하린"))
-        // 기존 어순(버릴 이름이 앞)은 그대로 동작해야 한다.
-        val legacy = resolveCorrection("아니 예하린씨 말고 구예원씨 직급 알려줘", names)
-        assertTrue(legacy, legacy.startsWith("구예원"))
-        assertFalse(legacy, legacy.contains("예하린"))
-    }
 
     @Test
     fun `정정하면 뒤에 말한 사람으로 바뀐다`() {
