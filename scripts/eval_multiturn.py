@@ -511,9 +511,19 @@ def rescore_from_dump(path, cards):
         print(f"  [{k}] {d}턴  {q}\n      {why}")
 
 
-def build_scenarios(cards, rng):
+def build_scenarios(cards, rng, scenario_set="v1"):
     """
     시나리오를 카드 데이터에서 생성한다.
+
+    **scenario_set — 시험지 버전.** `v1` 은 **바뀌지 않는다**(165 시나리오 / 435턴 / 유형 27종).
+    지표 문서의 값이 이 시험지에서 나왔으므로, 기본값을 바꾸면 그 값들이 재현되지 않는다.
+    표본이 부족한 유형을 늘리려면 `v2` 를 쓴다 — 늘어난 시험지의 숫자는 v1 값과
+    **비교할 수 없다**(다른 시험이다). 인용할 때 버전을 반드시 함께 적는다.
+
+    v2 에서 늘린 것 — 표본이 10 이하라 개선·회귀를 논할 수 없던 세 유형이다:
+      · 무관 요청 카드 억제  10턴 -> 30턴  (도구 범위 밖 4->12, 잡담 후 복귀 6->18)
+      · 모호 지시             8 -> 30 시나리오  (2장짜리 지역+직함 조합이 54개 있다)
+      · 사실 정정             4 -> 12 시나리오  (정정 말투를 늘린다)
 
     **멀티턴 평가이므로 다중 턴이 주가 되어야 한다.** 처음에는 1턴 시나리오가 과반(57%)
     이었는데, 그러면 이름만 멀티턴이지 실제로 재는 건 단발 검색이다. 단발로만 확인할 수
@@ -527,6 +537,10 @@ def build_scenarios(cards, rng):
     """
     name_counts = Counter(c["name"] for c in cards)
     unique = [c for c in cards if name_counts[c["name"]] == 1]
+    if scenario_set not in ("v1", "v2"):
+        raise ValueError(f"모르는 시험지 버전: {scenario_set!r} (v1 또는 v2)")
+    v2 = scenario_set == "v2"
+
     by_id_all = {c["id"]: c for c in cards}
     title_counts = Counter()
     for c in cards:
@@ -715,6 +729,19 @@ def build_scenarios(cards, rng):
         ("내 부서는 영업팀이야", "내 부서는 기획팀이야", "내 부서 뭐였지?"),
         ("내 이름은 김철수야", "아니 김철수가 아니라 김철호야", "내 이름 뭐라고 했지?"),
     ]
+    if v2:
+        # 표본 4 -> 12. **말투를 늘리는 것이 핵심이다** — 같은 의도를 다르게 말했을 때
+        # 깨지는지가 이 유형에서 실제로 잡히던 결함이었다(라우팅 0.250, n=4 로는 판정 불가).
+        CORRECTIONS += [
+            ("내 직급은 대리야", "아 대리 아니고 과장이야", "내 직급 뭐라고 했지?"),
+            ("내 회사는 미래상사야", "정정할게. 미래상사가 아니라 미래산업이야", "내 회사 이름 다시 말해줘"),
+            ("내 부서는 인사팀이야", "부서는 인사팀이 아니라 총무팀이야", "내 부서 어디라고 했지?"),
+            ("내 이름은 박지훈이야", "박지훈 말고 박진훈이야", "내 이름 다시 알려줘"),
+            ("내 회사는 대성물산이야", "아니야, 대성상사야", "아까 내 회사 뭐라고 했었지?"),
+            ("내 직급은 팀장이야", "팀장이 아니라 실장이라고 했어야 했네", "내 직급 알려줘"),
+            ("내 부서는 개발2팀이야", "개발2팀 아니고 개발3팀이야", "내 부서 뭐였는지 말해줘"),
+            ("내 회사는 한성테크야", "한성테크가 아니라 한성테크놀로지야", "내 회사 정확히 뭐였지?"),
+        ]
     for first, second, recall in CORRECTIONS:
         # 두 번째 발화에서 정본 값을 뽑는다 — 마지막 명사구가 새 값이다.
         new_value = second.split()[-1].rstrip("이야").rstrip("야").strip()
@@ -727,9 +754,17 @@ def build_scenarios(cards, rng):
 
     # (12) 도구 범위 밖 — 명함으로 답할 수 없는 요청. 지금은 "명함을 들이밀지 않는다"를
     #      재고, 캘린더/문자 도구가 붙으면 이 자리가 "그 도구로 라우팅돼야 한다"로 바뀐다.
-    for c, req in zip(pool[66:70],
-                      ["내일 3시에 일정 잡아줘", "오늘 날씨 어때?",
-                       "이 사람한테 문자 보내줘", "환율 얼마야?"]):
+    OUT_OF_SCOPE = ["내일 3시에 일정 잡아줘", "오늘 날씨 어때?",
+                    "이 사람한테 문자 보내줘", "환율 얼마야?"]
+    oos_cards = list(pool[66:70])
+    if v2:
+        # 4 -> 12. pool[148:] 은 v1 이 쓰지 않는 구간이라 다른 유형의 카드와 겹치지 않는다.
+        OUT_OF_SCOPE += ["알람 7시로 맞춰줘", "여기서 강남역까지 얼마나 걸려?",
+                         "이거 영어로 번역해줘", "3만 2천원 나누기 4 얼마야?",
+                         "노래 하나 틀어줘", "다음주 월요일 며칠이야?",
+                         "택시 불러줘", "이 근처 맛집 알려줘"]
+        oos_cards += list(pool[148:156])
+    for c, req in zip(oos_cards, OUT_OF_SCOPE):
         add("도구 범위 밖", [
             turn(f"{c['name']}씨 회사가 어디야?", "search", person_slots(c), [c["id"]],
                  must=[company_variants(c["company"])], must_not=REJECTIONS),
@@ -791,9 +826,17 @@ def build_scenarios(cards, rng):
     # (16) 잡담 삽입 후 복귀 — 명함과 무관한 턴이 focus 를 오염시키면 안 된다.
     #      실측: "오늘 날씨 어때?" 가 카드는 비웠는데 focus 를 검색 1등으로 바꿔서
     #      다음 "부서는?" 이 엉뚱한 사람 부서를 답했다.
-    for c, chat in zip(pool[78:84],
-                       ["오늘 날씨 어때?", "환율 얼마야?", "너 뭐 할 줄 알아?",
-                        "내일 비 와?", "지금 몇 시야?", "고마워"]):
+    CHITCHAT = ["오늘 날씨 어때?", "환율 얼마야?", "너 뭐 할 줄 알아?",
+                "내일 비 와?", "지금 몇 시야?", "고마워"]
+    chat_cards = list(pool[78:84])
+    if v2:
+        # 6 -> 18. 무관 요청 카드 억제의 분모 절반이 이 유형에서 나온다.
+        CHITCHAT += ["점심 뭐 먹지", "잘 지내?", "농담 하나 해줘", "너 이름이 뭐야",
+                     "주말에 뭐해", "심심하다", "오늘 미세먼지 어때?", "커피 마시고 싶다",
+                     "이번 주 금요일 공휴일이야?", "축구 경기 결과 알려줘",
+                     "요즘 유행하는 노래 뭐야", "수고했어"]
+        chat_cards += list(pool[156:168])
+    for c, chat in zip(chat_cards, CHITCHAT):
         add("잡담 후 복귀", [
             turn(f"{c['name']}씨 회사가 어디야?", "search", person_slots(c), [c["id"]],
                  must=[company_variants(c["company"])], must_not=REJECTIONS),
@@ -922,8 +965,11 @@ def build_scenarios(cards, rng):
     #      (되묻는 말은 두 묶음 모두를 만족하므로 통과한다).
     clarify = ["누구", "어느", "두 분", "두 사람", "둘 다", "모두"]
     ambiguous_made = 0
+    # v1 은 8개에서 멈춘다(체크리스트 n=8 — 1건이 12.5%p). 2장짜리 지역+직함 조합이
+    # 54개 있으므로 v2 에서 30개까지 늘린다.
+    ambiguous_cap = 30 if v2 else 8
     for (loc, t), ids in combos.items():
-        if len(ids) != 2 or ambiguous_made >= 8:
+        if len(ids) != 2 or ambiguous_made >= ambiguous_cap:
             continue
         # 부서가 같으면 갈리지 않아 시험이 안 된다 — 회사로 바꿔 물어 표본을 살린다.
         for field, ask in (("department", "그 사람 부서는?"), ("company", "그 사람 회사는?")):
@@ -1273,6 +1319,10 @@ def main():
                     help="시나리오를 N개만 (유형별 층화 추출). 21종을 다 담으려면 25 이상")
     ap.add_argument("--repeat", type=int, default=1, help="k회 반복해 pass^k 를 낸다")
     ap.add_argument("--verbose", action="store_true", help="실패 건을 전부 출력")
+    ap.add_argument("--scenario-set", default="v1", choices=["v1", "v2"],
+                    help="시험지 버전. v1(기본)=165 시나리오/435턴 — 지표 문서의 값이 나온 "
+                         "시험지이므로 바꾸지 않는다. v2=표본 부족 3유형(무관 요청 억제·"
+                         "모호 지시·사실 정정)을 늘린 판. **버전이 다르면 숫자를 비교할 수 없다.**")
     ap.add_argument("--seed", type=int, default=SEED,
                     help="시나리오 생성 seed. 기본 42 는 개발하면서 계속 보던 셋이라, "
                          "다른 값을 주면 **한 번도 안 본 시나리오**로 검증할 수 있다"
@@ -1296,7 +1346,7 @@ def main():
     if _st != "ok":
         print(_cfp.banner(_st, _msg), flush=True)
 
-    scenarios = build_scenarios(cards, random.Random(args.seed))
+    scenarios = build_scenarios(cards, random.Random(args.seed), args.scenario_set)
     if args.sample and args.sample < len(scenarios):
         scenarios = stratified_sample(scenarios, args.sample, random.Random(args.seed))
 
