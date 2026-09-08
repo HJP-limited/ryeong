@@ -1,0 +1,26 @@
+[
+  {
+    "line": 18685,
+    "file": "hybrid_server.py",
+    "old": "    tail = question\n    for sep in (\".\", \"!\", \"?\"):\n        parts = [p for p in tail.split(sep) if p.strip()]\n        if len(parts) > 1:\n            tail = parts[-1]\n    # 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.\n    for n in ordered:\n        if n == target:          # 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다\n            continue\n        tail = tail.replace(n + \"씨\", \" \").replace(n, \" \")\n    for p in PRONOUNS:\n        tail = tail.replace(p, \" \")",
+    "new": "    # **요청이 담긴 문장**을 고른다. 무조건 마지막 문장을 쓰면\n    # \"X씨 회사 말한 거야. Y씨 말고\" 에서 'Y씨 말고' 만 남아 물어본 칸이 사라진다\n    # (실측: 통합 벤치 v1.1 기준선 실패 6건이 전부 이 어순이었다).\n    parts = [p for p in re.split(r\"[.!?]\", question) if p.strip()]\n    if len(parts) > 1:\n        cand = [p for p in parts if target in p] or [p for p in parts if attribute_of(p)]\n        tail = (cand or parts)[-1]\n    else:\n        tail = question\n    # 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.\n    # 이름은 **전부** 지운다(대상은 어차피 앞에 다시 붙인다). 조사까지 함께 걷어야\n    # \"손도윤씨가 아니라\" 의 '가' 같은 조각이 안 남는다.\n    for n in ordered:\n        tail = re.sub(re.escape(n) + r\"(?:씨|님)?(?:가|이|은|는|을|를|도|의)?\", \" \", tail)\n    for p in PRONOUNS:\n        tail = tail.replace(p, \" \")\n    # 정정 표지 자체도 요청이 아니다.\n    for marker in (\"말한 거야\", \"말한거야\", \"말고\", \"아니라\", \"아니고\", \"아니\"):\n        tail = tail.replace(marker, \" \")"
+  },
+  {
+    "line": 18690,
+    "file": "MainActivity.kt",
+    "old": "    // 정정 뒤의 실제 요청만 남긴다 — 마지막 문장이 그 요청이다.\n    var tail = question\n    for (sep in listOf(\".\", \"!\", \"?\")) {\n        val parts = tail.split(sep).filter { it.isNotBlank() }\n        if (parts.size > 1) tail = parts.last()\n    }\n    // 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.\n    // 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다.\n    for (n in ordered) if (n != target) tail = tail.replace(\"${n}씨\", \" \").replace(n, \" \")\n    for (p in FOLLOWUP_PRONOUNS) tail = tail.replace(p, \" \")",
+    "new": "    // 정정 뒤의 실제 요청만 남긴다. **요청이 담긴 문장**을 고른다 — 무조건 마지막 문장을\n    // 쓰면 \"X씨 회사 말한 거야. Y씨 말고\" 에서 'Y씨 말고' 만 남아 물어본 칸이 사라진다\n    // (실측: 통합 벤치 v1.1 기준선 실패 6건이 전부 이 어순이었다).\n    val parts = question.split(Regex(\"[.!?]\")).filter { it.isNotBlank() }\n    var tail = if (parts.size > 1) {\n        val cand = parts.filter { target in it }.ifEmpty { parts.filter { attributeOf(it) != null } }\n        cand.ifEmpty { parts }.last()\n    } else {\n        question\n    }\n    // 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.\n    // 이름은 **전부** 지운다(대상은 어차피 앞에 다시 붙인다). 조사까지 함께 걷어야\n    // \"손도윤씨가 아니라\" 의 '가' 같은 조각이 안 남는다.\n    for (n in ordered) {\n        tail = tail.replace(Regex(Regex.escape(n) + \"(?:씨|님)?(?:가|이|은|는|을|를|도|의)?\"), \" \")\n    }\n    for (p in FOLLOWUP_PRONOUNS) tail = tail.replace(p, \" \")\n    // 정정 표지 자체도 요청이 아니다.\n    for (marker in listOf(\"말한 거야\", \"말한거야\", \"말고\", \"아니라\", \"아니고\", \"아니\")) {\n        tail = tail.replace(marker, \" \")\n    }"
+  },
+  {
+    "line": 18708,
+    "file": "hybrid_server.py",
+    "old": "    # **요청이 담긴 문장**을 고른다. 무조건 마지막 문장을 쓰면\n    # \"X씨 회사 말한 거야. Y씨 말고\" 에서 'Y씨 말고' 만 남아 물어본 칸이 사라진다\n    # (실측: 통합 벤치 v1.1 기준선 실패 6건이 전부 이 어순이었다).\n    parts = [p for p in re.split(r\"[.!?]\", question) if p.strip()]\n    if len(parts) > 1:\n        cand = [p for p in parts if target in p] or [p for p in parts if attribute_of(p)]\n        tail = (cand or parts)[-1]\n    else:\n        tail = question",
+    "new": "    # **요청이 담긴 문장**을 고른다 — 물어본 칸(속성 명사)이 있는 문장이 요청이다.\n    # 무조건 마지막 문장을 쓰면 \"X씨 회사 말한 거야. Y씨 말고\" 에서 'Y씨 말고' 만 남아\n    # 물어본 칸이 사라진다(실측: 통합 벤치 v1.1 기준선 실패 6건이 전부 이 어순).\n    # 반대로 대상 이름이 있는 문장을 먼저 고르면 \"…남다은씨야. 그분 회사는?\" 에서\n    # 정정 문장만 남아 요청이 사라진다 — **속성이 먼저, 이름은 그다음**이다.\n    parts = [p for p in re.split(r\"[.!?]\", question) if p.strip()]\n    if len(parts) > 1:\n        cand = [p for p in parts if attribute_of(p)] or [p for p in parts if target in p]\n        tail = (cand or parts)[-1]\n    else:\n        tail = question"
+  },
+  {
+    "line": 18710,
+    "file": "MainActivity.kt",
+    "old": "    // 정정 뒤의 실제 요청만 남긴다. **요청이 담긴 문장**을 고른다 — 무조건 마지막 문장을\n    // 쓰면 \"X씨 회사 말한 거야. Y씨 말고\" 에서 'Y씨 말고' 만 남아 물어본 칸이 사라진다\n    // (실측: 통합 벤치 v1.1 기준선 실패 6건이 전부 이 어순이었다).\n    val parts = question.split(Regex(\"[.!?]\")).filter { it.isNotBlank() }\n    var tail = if (parts.size > 1) {\n        val cand = parts.filter { target in it }.ifEmpty { parts.filter { attributeOf(it) != null } }\n        cand.ifEmpty { parts }.last()\n    } else {\n        question\n    }",
+    "new": "    // 정정 뒤의 실제 요청만 남긴다. **요청이 담긴 문장**을 고른다 — 물어본 칸(속성 명사)이\n    // 있는 문장이 요청이다. 무조건 마지막 문장을 쓰면 \"X씨 회사 말한 거야. Y씨 말고\" 에서\n    // 'Y씨 말고' 만 남아 물어본 칸이 사라지고(벤치 v1.1 실패 6건), 반대로 대상 이름이 있는\n    // 문장을 먼저 고르면 \"…남다은씨야. 그분 회사는?\" 에서 요청이 사라진다.\n    // **속성이 먼저, 이름은 그다음**이다.\n    val parts = question.split(Regex(\"[.!?]\")).filter { it.isNotBlank() }\n    var tail = if (parts.size > 1) {\n        val cand = parts.filter { attributeOf(it) != null }.ifEmpty { parts.filter { target in it } }\n        cand.ifEmpty { parts }.last()\n    } else {\n        question\n    }"
+  }
+]

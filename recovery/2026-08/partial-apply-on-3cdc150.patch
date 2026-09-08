@@ -1,0 +1,627 @@
+diff --git a/app/src/main/java/com/example/hjp/MainActivity.kt b/app/src/main/java/com/example/hjp/MainActivity.kt
+index 1b44fe2..b40ec88 100644
+--- a/app/src/main/java/com/example/hjp/MainActivity.kt
++++ b/app/src/main/java/com/example/hjp/MainActivity.kt
+@@ -441,6 +441,18 @@ private fun ChatScreen(
+                         ids.joinToString(",").ifBlank { null },
+                     )
+                     session.putToolContext(AgentSession.KEY_LAST_QUERY, question)
++                    // 이름이 한 장으로 좁혀졌으면 그 짝을 기억한다(동명이인 되부르기).
++                    // 회사로 특정한 턴("샤인기계 백다인씨")이 여기 해당한다.
++                    val only = result.search?.results?.singleOrNull()?.card
++                    if (only != null && question.contains(only.name.orEmpty())) {
++                        session.putToolContext(
++                            AgentSession.KEY_SUBJECT_CARDS,
++                            appendSubjectCard(
++                                session.toolContextValue(AgentSession.KEY_SUBJECT_CARDS),
++                                only.name.orEmpty(), only.id,
++                            ),
++                        )
++                    }
+                 }
+                 // 이번 턴이 물어본 속성을 남겨 둔다 — 다음 턴이 "○○씨는?" 처럼
+                 // 속성을 생략하면 여기서 이어받는다. 속성이 없는 질문이면
+@@ -1382,7 +1394,10 @@ private fun runChat(
+     val searchQuery = resolveSearchQuery(question, focusPerson)
+ 
+     val search = try {
+-        searchService.searchHybrid(searchQuery, 5)
++        pinAmbiguousTwin(
++            searchService.searchHybrid(searchQuery, 5),
++            session.toolContextValue(AgentSession.KEY_SUBJECT_CARDS),
++        )
+     } catch (e: Throwable) {
+         return ChatResult("검색 중 문제가 있었습니다.", null, error = e.message ?: e.javaClass.simpleName)
+     }
+@@ -1486,6 +1501,44 @@ private fun cardReferencedIn(card: BusinessCardEntity, answer: String): Boolean
+  * 원본을 유지한다(이름이 없다고 해서 후보가 무관한 건 아니므로). 이름도 없고 집계형
+  * 형식도 아니면 명함과 무관한 답변이므로 카드를 비운다.
+  */
++/**
++ * "이름=id" 목록에 한 줄을 넣거나 갱신한다. 같은 이름이 다시 확정되면 최신 것으로 덮는다 —
++ * 사용자가 대화 중에 다른 쪽으로 옮겨갈 수 있고, 그때는 최근 확정이 맞다.
++ */
++internal fun appendSubjectCard(existing: String?, name: String, cardId: String): String {
++    if (name.isBlank() || cardId.isBlank()) return existing.orEmpty()
++    val kept = existing.orEmpty().split(",")
++        .filter { it.isNotBlank() && it.substringBefore("=") != name }
++    return (kept + "$name=$cardId").joinToString(",")
++}
++
++/** "이름=id" 목록에서 그 이름에 대해 이 대화가 정한 카드 id 를 찾는다. */
++internal fun subjectCardFor(existing: String?, name: String): String? =
++    existing.orEmpty().split(",")
++        .firstOrNull { it.substringBefore("=") == name && "=" in it }
++        ?.substringAfter("=")
++        ?.takeIf { it.isNotBlank() }
++
++/**
++ * **동명이인 되부르기.** 이름 조건이 하나인데 그 이름 카드가 여럿 남았고, 이 대화가
++ * 앞에서 한 명으로 정해 둔 적이 있으면 그쪽만 남긴다. 사람은 한 번 정하면 다음부터
++ * 이름만 댄다("샤인기계 백다인씨 직급" ... 세 턴 뒤 "백다인씨 전화번호는?").
++ *
++ * 규칙을 프롬프트에 적지 않고 여기서 결정적으로 거른다 — 이 저장소에서 프롬프트 규칙
++ * 추가는 4전 4패, 결정적 우회는 9전 9승이다.
++ */
++internal fun pinAmbiguousTwin(
++    search: CardSearchResponse,
++    subjectCards: String?,
++): CardSearchResponse {
++    if (search.fieldFilters.names.size != 1) return search
++    val pinnedId = subjectCardFor(subjectCards, search.fieldFilters.names.first()) ?: return search
++    val pinned = search.results.firstOrNull { it.card.id == pinnedId } ?: return search
++    val sameName = search.results.filter { it.card.name == pinned.card.name }
++    if (sameName.size <= 1) return search
++    return search.copy(results = search.results.filter { it.card.id == pinnedId || it !in sameName })
++}
++
+ internal fun narrowByAnswer(
+     search: CardSearchResponse,
+     answer: String,
+@@ -1699,7 +1752,13 @@ internal fun resolveCorrection(question: String, knownNames: List<String>): Stri
+     if (knownNames.size < 2) return question
+     // 추출 순서가 아니라 **발화에 나타난 위치** 순으로 본다.
+     val ordered = knownNames.sortedBy { question.indexOf(it) }
+-    val target = ordered.last()
++    // 거절 표지 바로 앞의 이름이 **버릴** 이름이다. "X씨 직급 말한 거야. Y씨 말고" 에서
++    // 마지막 이름(Y)을 대상으로 잡으면 뒤집힌다(통합 벤치 v1 기준선 2/2 실패).
++    val rejected = knownNames.filter { n ->
++        Regex(Regex.escape(n) + "(?:씨|님)?(?:가|이|은|는)?\\s*(?:말고|아니라|아니고)").containsMatchIn(question)
++    }.toSet()
++    val kept = ordered.filterNot { it in rejected }
++    val target = if (kept.isNotEmpty() && rejected.isNotEmpty()) kept.last() else ordered.last()
+     // 정정 뒤의 실제 요청만 남긴다 — 마지막 문장이 그 요청이다.
+     var tail = question
+     for (sep in listOf(".", "!", "?")) {
+@@ -1707,7 +1766,8 @@ internal fun resolveCorrection(question: String, knownNames: List<String>): Stri
+         if (parts.size > 1) tail = parts.last()
+     }
+     // 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
+-    for (n in ordered.dropLast(1)) tail = tail.replace("${n}씨", " ").replace(n, " ")
++    // 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다.
++    for (n in ordered) if (n != target) tail = tail.replace("${n}씨", " ").replace(n, " ")
+     for (p in FOLLOWUP_PRONOUNS) tail = tail.replace(p, " ")
+     tail = tail.replace(Regex("\\s+"), " ").trim()
+     return "$target $tail".trim()
+diff --git a/app/src/main/java/com/example/hjp/agent/AgentSession.kt b/app/src/main/java/com/example/hjp/agent/AgentSession.kt
+index 9ce29dd..5c36a0a 100644
+--- a/app/src/main/java/com/example/hjp/agent/AgentSession.kt
++++ b/app/src/main/java/com/example/hjp/agent/AgentSession.kt
+@@ -233,5 +233,35 @@ class AgentSession {
+          * 이름만 모으므로 길어져도 몇백 바이트다.
+          */
+         const val KEY_SUBJECT_HISTORY = "subject_history"
++
++        /**
++         * 이름 -> 카드 id 를 "이름=id" 로 이어 둔 목록. **동명이인을 이 대화가 어느 쪽으로
++         * 정했는지** 기억한다.
++         *
++         * [KEY_SUBJECT_HISTORY] 는 이름만 담아서 "백다인이 나왔다"까지만 안다. 그런데
++         * 카드에 백다인은 두 장이다. 회사로 한 명을 특정한 뒤("샤인기계 백다인씨") 몇 턴
++         * 지나서 이름만으로 다시 부르면, focus 도 직전 카드 id 도 그새 방해 인물로 덮여서
++         * 어느 백다인인지 알 길이 없다 — 통합 벤치 v1.3 실패 3건이 전부 이것이고,
++         * 되묻지도 않고 틀린 번호를 줬다.
++         *
++         * 이름이 **한 장으로 좁혀진** 턴에서만 기록한다. 애매한 채로 지나간 턴을 기억하면
++         * 나중에 그 애매함을 확신으로 둔갑시킨다.
++         */
++        const val KEY_SUBJECT_CARDS = "subject_cards"
++
++        /**
++         * 이름 -> 카드 id 를 "이름=id" 로 이어 둔 목록. **동명이인을 이 대화가 어느 쪽으로
++         * 정했는지** 기억한다.
++         *
++         * [KEY_SUBJECT_HISTORY] 는 이름만 담아서 "백다인이 나왔다"까지만 안다. 그런데
++         * 카드에 백다인은 두 장이다. 회사로 한 명을 특정한 뒤("샤인기계 백다인씨") 몇 턴
++         * 지나서 이름만으로 다시 부르면, focus 도 직전 카드 id 도 그새 방해 인물로 덮여서
++         * 어느 백다인인지 알 길이 없다 — 통합 벤치 v1.3 실패 3건이 전부 이것이고,
++         * 되묻지도 않고 틀린 번호를 줬다.
++         *
++         * 이름이 **한 장으로 좁혀진** 턴에서만 기록한다. 애매한 채로 지나간 턴을 기억하면
++         * 나중에 그 애매함을 확신으로 둔갑시킨다.
++         */
++        const val KEY_SUBJECT_CARDS = "subject_cards"
+     }
+ }
+diff --git a/app/src/main/java/com/example/hjp/search/CardGazetteer.kt b/app/src/main/java/com/example/hjp/search/CardGazetteer.kt
+index 23c5bf5..5469f38 100644
+--- a/app/src/main/java/com/example/hjp/search/CardGazetteer.kt
++++ b/app/src/main/java/com/example/hjp/search/CardGazetteer.kt
+@@ -29,6 +29,16 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
+ 
+     private val titles = HashSet<String>()
+     private val companies = HashSet<String>()
++
++    /**
++     * 회사 **핵심어** 어휘. [companies]는 회사명 전체 문자열이라("유한회사 앰버")
++     * 질의 토큰 하나로는 절대 안 맞는다 — 그래서 질의에 회사를 댔는데도 조건이 안 걸렸다.
++     * 실측: "샤인기계 백다인씨 직급"이 백다인 두 장을 다 가져왔고, 몇 턴 뒤
++     * "백다인씨 전화번호"가 엉뚱한 쪽을 답했다(통합 벤치 v1.3 실패 3건이 전부 이 모양).
++     * 법인 표기(주식회사·유한회사)는 197·160장이 공유하므로 뺀다 — 넣으면 그게
++     * 필터가 되어 357장이 한 덩어리가 된다.
++     */
++    private val companyTerms = HashSet<String>()
+     private val names = HashSet<String>()
+ 
+     /**
+@@ -91,7 +101,13 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
+             }
+ 
+             val comp = card.company.orEmpty().trim()
+-            if (comp.isNotBlank()) companies.add(KeywordSearchRanker.normalize(comp))
++            if (comp.isNotBlank()) {
++                val normalizedCompany = KeywordSearchRanker.normalize(comp)
++                companies.add(normalizedCompany)
++                normalizedCompany.split(" ")
++                    .filter { it.length >= 2 && it !in COMPANY_STOPWORDS }
++                    .forEach { companyTerms.add(it) }
++            }
+ 
+             val nm = card.name.orEmpty().trim()
+             if (nm.isNotBlank()) names.add(KeywordSearchRanker.normalize(nm))
+@@ -157,6 +173,12 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
+ 
+     fun isKnownAddressTerm(token: String): Boolean = token in addressTerms
+ 
++    fun isKnownCompanyTerm(token: String): Boolean = token in companyTerms
++
++    /** 정규화된 질의 안에 통째로 들어 있는 회사명들. [cores] 중 하나를 포함하는 것만 본다. */
++    fun companiesContainedIn(normalizedQuery: String, cores: Set<String>): List<String> =
++        companies.filter { c -> c in normalizedQuery && cores.any { it in c.split(" ") } }
++
+     fun isKnownName(token: String): Boolean = token in names
+ 
+     fun isKnownTitle(token: String): Boolean = token in titles || token in titleTerms
+@@ -228,17 +250,26 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
+ }
+ 
+ /** 질의에서 뽑아낸 필드 조건. 비어 있으면 필터를 걸지 않는다. */
++/**
++ * 법인 표기. normalize가 괄호를 지우므로 "(주)"는 "주", "(유)"는 "유"가 되는데 둘 다
++ * 한 글자라 길이 조건에서 이미 걸러진다. 여기 남기는 것은 두 글자 이상인 것들이다.
++ */
++private val COMPANY_STOPWORDS = setOf("주식회사", "유한회사")
++
+ data class FieldFilters(
+     val names: List<String> = emptyList(),
+     val locations: List<String> = emptyList(),
+     val titles: List<String> = emptyList(),
++    val companies: List<String> = emptyList(),
+ ) {
+-    val isEmpty: Boolean get() = names.isEmpty() && locations.isEmpty() && titles.isEmpty()
++    val isEmpty: Boolean
++        get() = names.isEmpty() && locations.isEmpty() && titles.isEmpty() && companies.isEmpty()
+ 
+     override fun toString(): String = buildList {
+         if (names.isNotEmpty()) add("이름=${names.joinToString(",")}")
+         if (locations.isNotEmpty()) add("지역=${locations.joinToString(",")}")
+         if (titles.isNotEmpty()) add("직함=${titles.joinToString(",")}")
++        if (companies.isNotEmpty()) add("회사=${companies.joinToString(",")}")
+     }.joinToString(" ")
+ }
+ 
+@@ -279,7 +310,25 @@ fun extractFieldFilters(analyzed: AnalyzedSearchQuery, gazetteer: CardGazetteer?
+         }
+         if (gazetteer.isKnownAddressTerm(token)) locs.add(token)
+     }
+-    return FieldFilters(names.sorted(), locs.sorted(), titles.sorted())
++    // 회사는 마지막이다. 이름/직함/지역이 먼저 가져간 토큰은 건드리지 않는다 — 회사
++    // 핵심어가 사람 이름이나 지역과 겹칠 수 있고, 그때 우선순위를 뒤집으면 이름 검색이
++    // 깨진다. 파이썬 쪽(extract_field_filters)과 같은 순서를 유지할 것.
++    val comps = LinkedHashSet<String>()
++    for (token in analyzed.keywordTokens) {
++        if (token in names || token in titles || token in locs) continue
++        if (gazetteer.isKnownCompanyTerm(token)) comps.add(token)
++    }
++    // **법인 표기까지 댔으면 그걸 살린다.** 핵심어만 쓰면 "유한회사 경기전자"와
++    // "주식회사 경기전자"가 한 덩어리가 되는데 데이터에서 이 둘은 다른 회사다
++    // (핵심어가 겹치는 조합이 41조 있다). 질의에 회사명 전체가 통째로 들어 있으면
++    // 그 전체를 조건으로 삼고, 아니면 핵심어로 남긴다 — "경기전자 사람"은 사용자가
++    // 안 가렸으므로 우리도 가리지 않는다.
++    val companyFilter = if (comps.isEmpty()) emptyList() else {
++        val normalizedQuery = KeywordSearchRanker.normalize(analyzed.rawQuery)
++        val exact = gazetteer.companiesContainedIn(normalizedQuery, comps)
++        if (exact.isNotEmpty()) exact.sorted() else comps.sorted()
++    }
++    return FieldFilters(names.sorted(), locs.sorted(), titles.sorted(), companyFilter)
+ }
+ 
+ /** 필터 조건을 모두(AND) 만족하는 카드만 남긴다. 필터가 없으면 원본 그대로. */
+@@ -354,7 +403,14 @@ private fun matchFieldFilters(
+     // 순정보다 나빠서 되돌렸다. 데이터 표기를 정규화하는 쪽이 맞는 해법이다.
+     val titleWords = KeywordSearchRanker.normalize(card.title.orEmpty()).split(" ")
+     val titleOk = filters.titles.isEmpty() || filters.titles.any { it in titleWords }
+-    nameOk && locOk && titleOk
++    // 회사도 단어 단위다. 부분 문자열이면 "대성전자"가 "대성"에 걸린다.
++    // 두 가지를 받는다: 회사명 **전체**("유한회사 경기전자")면 통째로 일치해야 하고,
++    // 핵심어("경기전자")면 단어 단위로 맞춘다. 부분 문자열이면 "대성전자"가 "대성"에 걸린다.
++    val companyWhole = KeywordSearchRanker.normalize(card.company.orEmpty())
++    val companyWords = companyWhole.split(" ")
++    val companyOk = filters.companies.isEmpty() ||
++        filters.companies.any { it == companyWhole || it in companyWords }
++    nameOk && locOk && titleOk && companyOk
+ }
+ 
+ /**
+diff --git a/app/src/test/java/com/example/hjp/MainActivityTest.kt b/app/src/test/java/com/example/hjp/MainActivityTest.kt
+index 11c2898..3e232ee 100644
+--- a/app/src/test/java/com/example/hjp/MainActivityTest.kt
++++ b/app/src/test/java/com/example/hjp/MainActivityTest.kt
+@@ -324,6 +324,110 @@ class MainActivityTest {
+      * 각 카드에 서로 다른 회사/주소/전화를 준다 — 필드 기반 매칭을 검증할 수 있게.
+      * 회사·주소는 이름을 포함하지 않는다(이름 매칭과 필드 매칭을 분리해서 보려고).
+      */
++    // ---- 동명이인 되부르기 ----
++
++    private fun twinResponse(names: List<String>) = CardSearchResponse(
++        query = "q", engine = "test", retrieval = "keyword",
++        keywordQuery = "q", semanticQuery = "q",
++        fieldFilters = FieldFilters(names = listOf("백다인")),
++        results = listOf(
++            CardSearchHit(repairCard("백다인", "샤인기계").also { it.id = "c1" }, 1.0, 0, null, 0f),
++            CardSearchHit(repairCard("백다인", "앰버").also { it.id = "c2" }, 0.9, 1, null, 0f),
++        ).filter { it.card.id in names },
++    )
++
++    @Test
++    fun `앞에서 정해 둔 동명이인만 남긴다`() {
++        // 회사로 한 명을 특정한 뒤 몇 턴 지나 이름만으로 다시 부르는 경우다. focus 도
++        // 직전 카드 id 도 그새 방해 인물로 덮여서, 이 기억이 없으면 어느 쪽인지 모른다
++        // (통합 벤치 v1.3 실패 3건이 전부 이 모양이었고 되묻지도 않고 틀린 값을 줬다).
++        val search = twinResponse(listOf("c1", "c2"))
++        val pinned = pinAmbiguousTwin(search, "백다인=c2")
++        assertEquals(listOf("c2"), pinned.results.map { it.card.id })
++    }
++
++    @Test
++    fun `정해 둔 적이 없으면 후보를 그대로 둔다`() {
++        // 애매한 채로 지나간 대화를 확신으로 둔갑시키지 않는다.
++        val search = twinResponse(listOf("c1", "c2"))
++        assertEquals(listOf("c1", "c2"), pinAmbiguousTwin(search, null).results.map { it.card.id })
++        assertEquals(listOf("c1", "c2"),
++            pinAmbiguousTwin(search, "신민재=c9").results.map { it.card.id })
++    }
++
++    @Test
++    fun `후보가 한 장뿐이면 건드리지 않는다`() {
++        val search = twinResponse(listOf("c1"))
++        assertEquals(listOf("c1"), pinAmbiguousTwin(search, "백다인=c2").results.map { it.card.id })
++    }
++
++    @Test
++    fun `기억은 같은 이름이 다시 확정되면 최신으로 덮는다`() {
++        // 대화 중에 사용자가 다른 쪽으로 옮겨갈 수 있고, 그때는 최근 확정이 맞다.
++        val once = appendSubjectCard(null, "백다인", "c1")
++        assertEquals("백다인=c1", once)
++        val twice = appendSubjectCard(once, "백다인", "c2")
++        assertEquals("백다인=c2", twice)
++        val other = appendSubjectCard(twice, "신민재", "c9")
++        assertEquals("백다인=c2,신민재=c9", other)
++        assertEquals("c2", subjectCardFor(other, "백다인"))
++        assertEquals("c9", subjectCardFor(other, "신민재"))
++        assertNull(subjectCardFor(other, "남다은"))
++        assertNull(subjectCardFor(null, "백다인"))
++    }
++
++    // ---- 동명이인 되부르기 ----
++
++    private fun twinResponse(names: List<String>) = CardSearchResponse(
++        query = "q", engine = "test", retrieval = "keyword",
++        keywordQuery = "q", semanticQuery = "q",
++        fieldFilters = FieldFilters(names = listOf("백다인")),
++        results = listOf(
++            CardSearchHit(repairCard("백다인", "샤인기계").also { it.id = "c1" }, 1.0, 0, null, 0f),
++            CardSearchHit(repairCard("백다인", "앰버").also { it.id = "c2" }, 0.9, 1, null, 0f),
++        ).filter { it.card.id in names },
++    )
++
++    @Test
++    fun `앞에서 정해 둔 동명이인만 남긴다`() {
++        // 회사로 한 명을 특정한 뒤 몇 턴 지나 이름만으로 다시 부르는 경우다. focus 도
++        // 직전 카드 id 도 그새 방해 인물로 덮여서, 이 기억이 없으면 어느 쪽인지 모른다
++        // (통합 벤치 v1.3 실패 3건이 전부 이 모양이었고 되묻지도 않고 틀린 값을 줬다).
++        val search = twinResponse(listOf("c1", "c2"))
++        val pinned = pinAmbiguousTwin(search, "백다인=c2")
++        assertEquals(listOf("c2"), pinned.results.map { it.card.id })
++    }
++
++    @Test
++    fun `정해 둔 적이 없으면 후보를 그대로 둔다`() {
++        // 애매한 채로 지나간 대화를 확신으로 둔갑시키지 않는다.
++        val search = twinResponse(listOf("c1", "c2"))
++        assertEquals(listOf("c1", "c2"), pinAmbiguousTwin(search, null).results.map { it.card.id })
++        assertEquals(listOf("c1", "c2"),
++            pinAmbiguousTwin(search, "신민재=c9").results.map { it.card.id })
++    }
++
++    @Test
++    fun `후보가 한 장뿐이면 건드리지 않는다`() {
++        val search = twinResponse(listOf("c1"))
++        assertEquals(listOf("c1"), pinAmbiguousTwin(search, "백다인=c2").results.map { it.card.id })
++    }
++
++    @Test
++    fun `기억은 같은 이름이 다시 확정되면 최신으로 덮는다`() {
++        // 대화 중에 사용자가 다른 쪽으로 옮겨갈 수 있고, 그때는 최근 확정이 맞다.
++        val once = appendSubjectCard(null, "백다인", "c1")
++        assertEquals("백다인=c1", once)
++        val twice = appendSubjectCard(once, "백다인", "c2")
++        assertEquals("백다인=c2", twice)
++        val other = appendSubjectCard(twice, "신민재", "c9")
++        assertEquals("백다인=c2,신민재=c9", other)
++        assertEquals("c2", subjectCardFor(other, "백다인"))
++        assertEquals("c9", subjectCardFor(other, "신민재"))
++        assertNull(subjectCardFor(other, "남다은"))
++        assertNull(subjectCardFor(null, "백다인"))
++    }
++
+     private fun sampleSearchResponse(names: List<String>): CardSearchResponse {
+         val hits = names.mapIndexed { i, name ->
+             CardSearchHit(
+diff --git a/app/src/test/java/com/example/hjp/search/CardGazetteerTest.kt b/app/src/test/java/com/example/hjp/search/CardGazetteerTest.kt
+index ab25f43..326a81d 100644
+--- a/app/src/test/java/com/example/hjp/search/CardGazetteerTest.kt
++++ b/app/src/test/java/com/example/hjp/search/CardGazetteerTest.kt
+@@ -108,6 +108,57 @@ class CardGazetteerTest {
+         )
+     }
+ 
++    // ---- 회사 필터: 질의에 회사를 대면 실제 조건으로 걸린다 ----
++
++    private val twins = listOf(
++        card(id = "c1", name = "백다인", title = "디렉터",
++             company = "샤인기계", phone = "010-2975-8509"),
++        card(id = "c2", name = "백다인", title = "과장",
++             company = "유한회사 앰버", phone = "010-9717-8079"),
++        card(id = "c3", name = "신민재", title = "상무", company = "주식회사 대성전자"),
++    )
++
++    @Test
++    fun `회사 핵심어가 조건으로 걸려 동명이인을 가른다`() {
++        // 이게 없을 때 "샤인기계 백다인씨"가 백다인 두 장을 다 가져왔고, 몇 턴 뒤
++        // "백다인씨 전화번호"가 엉뚱한 쪽을 답했다(통합 벤치 v1.3 실패 3건).
++        val gz = CardGazetteer(twins)
++        val f = extractFieldFilters(analyze("샤인기계 백다인씨 직급 뭐야?"), gz)
++        assertEquals(listOf("백다인"), f.names)
++        assertEquals(listOf("샤인기계"), f.companies)
++        assertEquals(listOf("c1"), applyFieldFilters(twins, f).map { it.id })
++    }
++
++    @Test
++    fun `법인 표기는 회사 조건이 되지 않는다`() {
++        // "유한회사"는 160장이 공유한다. 이게 조건이 되면 그 전부가 한 덩어리로 남는다.
++        val gz = CardGazetteer(twins)
++        val f = extractFieldFilters(analyze("유한회사 앰버 다니는 백다인씨 주소는?"), gz)
++        assertEquals(listOf("앰버"), f.companies)
++        assertEquals(listOf("c2"), applyFieldFilters(twins, f).map { it.id })
++    }
++
++    @Test
++    fun `회사 조건은 단어 단위로 맞춘다`() {
++        // 부분 문자열이면 "대성전자"가 "대성"에 걸린다. 직함 매칭과 같은 원칙이다.
++        val gz = CardGazetteer(twins)
++        val f = FieldFilters(companies = listOf("대성"))
++        assertTrue(applyFieldFilters(twins, f).isEmpty())
++    }
++
++    @Test
++    fun `이름이 먼저 가져간 토큰은 회사가 되지 않는다`() {
++        // 회사 핵심어가 사람 이름과 겹칠 수 있다. 우선순위를 뒤집으면 이름 검색이 깨진다.
++        val overlap = listOf(
++            card(id = "o1", name = "한선우", company = "한선우컴퍼니"),
++            card(id = "o2", name = "김도윤", company = "다른회사"),
++        )
++        val gz = CardGazetteer(overlap)
++        val f = extractFieldFilters(analyze("한선우씨 전화번호는?"), gz)
++        assertEquals(listOf("한선우"), f.names)
++        assertTrue("이름을 회사로도 잡았다: ${f.companies}", f.companies.isEmpty())
++    }
++
+     @Test
+     fun `데이터에 없는 섬 이름도 기권한다`() {
+         // '도'로 끝나는 3글자 지명(울릉도/백령도)을 지역으로 인정한다.
+@@ -380,8 +431,10 @@ class CardGazetteerTest {
+             address: String = "",
+             location: String = "",
+             department: String = "",
++            company: String = "",
++            phone: String = "",
+         ): BusinessCardEntity = BusinessCardEntity(
+-            id, name, "", "", title, department, "", location, "", "", address, "", "", 0L,
++            id, name, "", company, title, department, "", location, phone, "", address, "", "", 0L,
+         )
+ 
+         /**
+diff --git a/scripts/eval_search.py b/scripts/eval_search.py
+index af17621..ed2776c 100644
+--- a/scripts/eval_search.py
++++ b/scripts/eval_search.py
+@@ -9,6 +9,7 @@ import sys as _sys
+ from pathlib import Path as _P
+ _sys.path.insert(0, str(_P(__file__).resolve().parent))
+ import card_fingerprint as _cfp
++import argparse
+ import json
+ import math
+ import os
+@@ -346,6 +347,11 @@ REGION_SUFFIXES = ("특별자치시", "특별자치도", "특별시", "광역시
+ NAME_HONORIFICS = ("씨", "님", "군", "양")
+ 
+ 
++# 법인 표기. normalize 가 괄호를 지우므로 "(주)" 는 "주", "(유)" 는 "유" 가 되는데
++# 둘 다 한 글자라 길이 조건에서 이미 걸러진다. 여기 남기는 것은 두 글자 이상인 것들이다.
++COMPANY_STOPWORDS = frozenset({"주식회사", "유한회사"})
++
++
+ class Gazetteer:
+     """카드 데이터에서 실제 존재하는 필드 값 집합을 추출해 둔다."""
+ 
+@@ -369,6 +375,12 @@ class Gazetteer:
+         # 셀 수가 없다.
+         self.departments = set()
+         self.department_terms = set()
++        # company_terms: 회사 **핵심어** 어휘. companies 는 회사명 전체 문자열이라
++        # ("유한회사 앰버") 질의 토큰 하나로는 절대 안 맞는다 — 그래서 질의에 회사를
++        # 댔는데도 조건이 안 걸렸다. 실측: "샤인기계 백다인씨 직급" 이 백다인 두 장을
++        # 다 가져왔고, 몇 턴 뒤 "백다인씨 전화번호" 가 엉뚱한 쪽을 답했다(v1.3 실패 3건이
++        # 전부 이 모양). 법인 표기(주식회사·유한회사)는 197·160장이 공유하므로 뺀다.
++        self.company_terms = set()
+ 
+         for c in cards:
+             t = (c.get("title") or "").strip()
+@@ -410,7 +422,11 @@ class Gazetteer:
+                     self.address_terms.add(extra)
+             comp = (c.get("company") or "").strip()
+             if comp:
+-                self.companies.add(normalize(comp))
++                normalized_company = normalize(comp)
++                self.companies.add(normalized_company)
++                for part in normalized_company.split():
++                    if len(part) >= 2 and part not in COMPANY_STOPWORDS:
++                        self.company_terms.add(part)
+             nm = (c.get("name") or "").strip()
+             if nm:
+                 self.names.add(normalize(nm))
+@@ -602,6 +618,25 @@ def extract_field_filters(query, gazetteer, ranked_ids=None, cards_by_id=None):
+         filters["location"] = sorted(set(locs))
+     if titles:
+         filters["title"] = sorted(set(titles))
++
++    # 3) 회사. 이름/직함/지역이 먼저 가져간 토큰은 건드리지 않는다 — 회사 핵심어가
++    #    사람 이름이나 지역과 겹칠 수 있고, 그때 우선순위를 뒤집으면 이름 검색이 깨진다.
++    claimed = set(filters.get("name") or []) | set(titles) | set(locs)
++    comps = [tok for tok in tokens
++             if tok not in claimed and tok in gazetteer.company_terms]
++    if comps:
++        # **법인 표기까지 댔으면 그걸 살린다.** 핵심어만 쓰면 "유한회사 경기전자"와
++        # "주식회사 경기전자"가 한 덩어리가 되는데, 데이터에서 이 둘은 다른 회사다
++        # (핵심어가 겹치는 조합이 41조 있다). 사용자가 법인 표기를 말했으면 그건
++        # 조건이지 군더더기가 아니다.
++        #
++        # 질의에 회사명 **전체**가 통째로 들어 있으면 그 전체를 조건으로 삼고,
++        # 아니면 핵심어로 남긴다("경기전자 사람" 은 둘 다 맞는 게 맞다 — 사용자가
++        # 안 가렸으므로 우리도 가리지 않는다).
++        normalized_query = normalize(query)
++        exact = [c for c in gazetteer.companies
++                 if c in normalized_query and any(t in c.split() for t in comps)]
++        filters["company"] = sorted(set(exact)) if exact else sorted(set(comps))
+     # 부서(department)는 여기서 뽑지 않는다 — 카운트 경로 전용이다.
+     # 공용 필터에 넣어봤다가 뺐다(실측): ① 204질의 중 발동 0건이라 회귀 여부를 평가로
+     # 검증할 수가 없었고(= 안전한 게 아니라 미검증), ② 정작 목표인 "AI 개발자 몇
+@@ -687,6 +722,13 @@ def _match_filters(candidate_ids, cards_by_id, filters):
+         if "location" in filters:
+             haystack = normalize((card.get("location") or "") + " " + (card.get("address") or ""))
+             ok = ok and any(term in haystack for term in filters["location"])
++        if "company" in filters:
++            # 두 가지를 받는다: 회사명 **전체**("유한회사 경기전자")면 통째로 일치해야
++            # 하고, 핵심어("경기전자")면 단어 단위로 맞춘다. 부분 문자열로 하면
++            # "대성전자" 가 "대성" 에 걸린다.
++            whole = normalize(card.get("company") or "")
++            words = whole.split()
++            ok = ok and any(term == whole or term in words for term in filters["company"])
+         if "title" in filters:
+             # 직함은 단어 단위로 맞춘다 — 부분 문자열이면 "대표이사"가 "이사"에 걸린다.
+             #
+@@ -1131,7 +1173,40 @@ def evaluate_no_result(name, rankings, queries, score_lists=None):
+     print("  * 0.000 이면 '없는 것을 없다고 말하지 못한다'는 뜻 — 점수 컷오프/필드 필터 미구현 상태를 반영")
+ 
+ 
++DEFAULT_BENCH = "bench/hjp_search_v1.json"
++
++
++def load_frozen_queries(path, cards):
++    """
++    동결본을 읽는다. **여기서 질의를 만들지 않는다** — 시험지와 채점기를 분리해야
++    시험지를 안 건드린 채로 채점 기준만 고칠 수 있고, 반대도 된다.
++
++    카드 지문을 대조한다. 카드가 바뀐 뒤 옛 동결본을 돌리면 정답 id 가 다른 사람을
++    가리킬 수 있는데, id 는 그대로라 다른 검사로는 안 잡힌다.
++    """
++    payload = json.loads(Path(path).read_text(encoding="utf-8"))
++    print(f"{payload['dataset_version']}  (동결 {payload.get('built_at') or '시각 없음'}, "
++          f"시드 {payload['seed']})")
++    now = _cfp.answer_fingerprint(cards)
++    if payload.get("cards_fingerprint") and payload["cards_fingerprint"] != now:
++        print(f"  [중단] 카드가 동결 시점과 다르다 — 동결본 {payload['cards_fingerprint'][:16]}… "
++              f"vs 지금 {now[:16]}…")
++        print("         정답 id 가 다른 사람을 가리킬 수 있다. 시험지를 다시 찍을 것"
++              "(scripts/build_search_bench.py).")
++        raise SystemExit(2)
++    return [(q["kind"], q["query"], q["relevant"]) for q in payload["queries"]]
++
++
+ def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--bench", default=DEFAULT_BENCH,
++                    help="동결된 질의셋. 이걸 읽고 여기서 질의를 만들지 않는다")
++    ap.add_argument("--regenerate", action="store_true",
++                    help="동결본을 무시하고 즉석 생성한다. **동결본을 새로 찍기 전에 "
++                         "미리 보는 용도**이지 평가용이 아니다 — 이걸로 낸 숫자는 "
++                         "다른 실행과 비교할 수 없다")
++    args = ap.parse_args()
++
+     rng = random.Random(42)
+     cards = json.loads(CARDS_PATH.read_text(encoding="utf-8"))
+     # 벡터가 지금 카드와 맞는지 먼저 본다. 안 맞으면 시맨틱이 옛날 내용으로
+@@ -1156,7 +1231,11 @@ def main():
+     gazetteer = Gazetteer(cards)
+     print(f"가제티어: 지역 {len(gazetteer.locations)}종, 직함 {len(gazetteer.titles)}종, 회사 {len(gazetteer.companies)}종")
+ 
+-    queries = build_eval_queries(cards, rng)
++    if args.regenerate:
++        print("  [주의] 즉석 생성 — 이 숫자는 다른 실행과 비교하지 말 것")
++        queries = build_eval_queries(cards, rng)
++    else:
++        queries = load_frozen_queries(args.bench, cards)
+     print(f"질의 {len(queries)}개 생성 (정답은 합성 데이터 필드에서 자동 유도)")
+     audit_queries(cards, queries)
+ 
+diff --git a/scripts/hybrid_server.py b/scripts/hybrid_server.py
+index 7e76e0f..a415d08 100644
+--- a/scripts/hybrid_server.py
++++ b/scripts/hybrid_server.py
+@@ -774,7 +774,12 @@ def resolve_correction(question: str, gazetteer):
+         return question
+     # 질의에 나타난 **위치** 순으로 본다(추출 순서가 아니라).
+     ordered = sorted(names, key=lambda n: question.find(n))
+-    target = ordered[-1]
++    # 거절 표지 바로 앞의 이름이 **버릴** 이름이다. "X씨 직급 말한 거야. Y씨 말고" 에서
++    # 마지막 이름(Y)을 대상으로 잡으면 뒤집힌다(통합 벤치 v1 기준선 2/2 실패).
++    rejected = {n for n in names
++                if re.search(re.escape(n) + r"(?:씨|님)?(?:가|이|은|는)?\s*(?:말고|아니라|아니고)", question)}
++    kept = [n for n in ordered if n not in rejected]
++    target = kept[-1] if kept and rejected else ordered[-1]
+     # 정정 뒤의 실제 요청만 남긴다. 마지막 문장이 그 요청이다.
+     tail = question
+     for sep in (".", "!", "?"):
+@@ -782,7 +787,9 @@ def resolve_correction(question: str, gazetteer):
+         if len(parts) > 1:
+             tail = parts[-1]
+     # 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
+-    for n in ordered[:-1]:
++    for n in ordered:
++        if n == target:          # 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다
++            continue
+         tail = tail.replace(n + "씨", " ").replace(n, " ")
+     for p in PRONOUNS:
+         tail = tail.replace(p, " ")

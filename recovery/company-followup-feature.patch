@@ -1,0 +1,292 @@
+commit 6b542158f2728c2a59b4b2d5a34a88fd0bda940e
+Author: babie0511 <babie0511@naver.com>
+Date:   Mon Sep 7 11:42:22 2026 +0900
+
+    회사 엔티티 후속질문 처리(그 회사 다니는 사람) 추가 + v15 벤치 결과 반영
+    
+    - 앱/서버 양쪽에 focus_company 추적 추가, "그 회사"가 속성이 아닌
+      엔티티를 가리킬 때(다니다/근무/재직/일하다/사람/직원/동료)만 회사명으로 치환
+    - 대명사 치환 순서를 길이순 정렬로 수정 (짧은 대명사가 긴 대명사를 먼저 먹는 문제)
+    - 수동 점검용 bench/manual_ui 추가
+    - bench/runs/v15_* — 성능지표.md/노션 정리 문서 헤드라인 숫자의 원본 실행 결과 커밋
+      (검색: 기권 정확도 17/35, 멀티턴: 165시나리오/435턴 — 문서 수치와 대조 확인)
+
+diff --git a/app/src/main/java/com/example/hjp/MainActivity.kt b/app/src/main/java/com/example/hjp/MainActivity.kt
+index 3921206..8b6119e 100644
+--- a/app/src/main/java/com/example/hjp/MainActivity.kt
++++ b/app/src/main/java/com/example/hjp/MainActivity.kt
+@@ -419,14 +419,17 @@ private fun ChatScreen(
+                 // focus가 엉뚱한 사람으로 튀는 문제가 있었다(실기기에서 발견).
+                 val resultNames = result.search?.results?.map { it.card.name }?.distinct().orEmpty()
+                 val namedInQuestion = resultNames.firstOrNull { name -> question.contains(name) }
+-                (namedInQuestion ?: resultNames.firstOrNull())?.let {
+-                    session.putToolContext(AgentSession.KEY_FOCUS_PERSON, it)
++                (namedInQuestion ?: resultNames.firstOrNull())?.let { focusName ->
++                    session.putToolContext(AgentSession.KEY_FOCUS_PERSON, focusName)
++                    result.search?.results?.firstOrNull { it.card.name == focusName }?.card?.company
++                        ?.takeIf { it.isNotBlank() }
++                        ?.let { session.putToolContext(AgentSession.KEY_FOCUS_COMPANY, it) }
+                     // 담화 순서 지시("처음에 물어본 사람")를 풀려면 최근 창 밖의 인물도
+                     // 알아야 한다. focus 는 매 턴 그 턴의 주인공이므로 그대로 쌓으면
+                     // '대화에 등장한 순서'가 된다.
+                     session.putToolContext(
+                         AgentSession.KEY_SUBJECT_HISTORY,
+-                        appendSubject(session.toolContextValue(AgentSession.KEY_SUBJECT_HISTORY), it),
++                        appendSubject(session.toolContextValue(AgentSession.KEY_SUBJECT_HISTORY), focusName),
+                     )
+                 }
+                 // 정정/확인 발화가 아니었을 때만 근거 카드를 갱신한다
+@@ -1180,6 +1183,7 @@ internal fun buildCapabilityAnswer(toolLabels: List<String>): String =
+ private val GENERIC_LIST_STRIP_WORDS = listOf(
+     // 긴 것부터 — "내가 가진"이 "내"보다 먼저 걷혀야 한다.
+     "가지고 있어", "가지고 있는", "가지고있는", "내가 가진", "가진", "가지고",
++    "지금", "현재",
+     "저장된", "등록된", "있는", "있어", "있나", "있지",
+     "보여줘", "알려줘", "찾아줘", "리스트", "목록", "전체", "명함", "이름",
+     "카드", "사람", "모두", "전부", "얼마나", "몇", "장수", "개수", "장", "명", "총", "개",
+@@ -1290,6 +1294,7 @@ private fun runChat(
+     }
+ 
+     val focusPerson = session.toolContextValue(AgentSession.KEY_FOCUS_PERSON)
++    val focusCompany = session.toolContextValue(AgentSession.KEY_FOCUS_COMPANY)
+     val prevCardIds = session.toolContextValue(AgentSession.KEY_LAST_CARD_IDS)
+         ?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+ 
+@@ -1408,7 +1413,7 @@ private fun runChat(
+         )
+     }
+ 
+-    val searchQuery = resolveSearchQuery(question, focusPerson)
++    val searchQuery = resolveSearchQuery(question, focusPerson, focusCompany)
+ 
+     val search = try {
+         pinAmbiguousTwin(
+@@ -1614,6 +1619,10 @@ private val FOLLOWUP_PRONOUNS = listOf(
+     "그 사람의", "걔", "그 회사", "그회사", "방금 그", "그 명함", "이 분", "이분",
+ )
+ 
++/** 회사 자체가 다음 검색의 대상인 표현. "그 회사 주소" 같은 속성 질문은 제외한다. */
++private val COMPANY_REFERENCE = Regex("그\\s*회사")
++private val COMPANY_ENTITY_WORDS = listOf("다니", "근무", "재직", "일하", "사람", "직원", "동료")
++
+ // 속성 명사로 시작하는 생략형 후속("메일은?", "직급은?")도 직전 인물에 대한 질문으로 본다.
+ // 반대로 새 이름으로 시작하면("옹현은…", "홍길동은…") 새 인물로 보고 focus를 붙이지 않는다.
+ private val ATTRIBUTE_NOUNS = listOf(
+@@ -2023,7 +2032,11 @@ internal fun applyNarrowing(question: String, previousTerms: String?): String {
+ private val ELLIPSIS_LEAD_FILLERS =
+     listOf("어느", "어떤", "그럼", "그러면", "근데", "그리고", "혹시", "이제", "또")
+ 
+-internal fun resolveSearchQuery(question: String, focusPerson: String?): String {
++internal fun resolveSearchQuery(
++    question: String,
++    focusPerson: String?,
++    focusCompany: String? = null,
++): String {
+     if (focusPerson == null) return question
+     val hasPronoun = FOLLOWUP_PRONOUNS.any { question.contains(it) }
+     // 질문에 '새 검색값'(전화번호 뒷자리 등)이 있으면 생략형 후속으로 보지 않는다 —
+@@ -2048,7 +2061,12 @@ internal fun resolveSearchQuery(question: String, focusPerson: String?): String
+     // 대명사도 없고 속성 명사로 시작하지도 않으면 새 인물/독립 질문 — 그대로 둔다.
+     if (!hasPronoun && !isElliptical) return question
+     var q = question
+-    for (p in FOLLOWUP_PRONOUNS) q = q.replace(p, focusPerson)
++    if (focusCompany != null && COMPANY_REFERENCE.containsMatchIn(question) &&
++        COMPANY_ENTITY_WORDS.any { it in question }
++    ) {
++        q = q.replace(COMPANY_REFERENCE, focusCompany)
++    }
++    for (p in FOLLOWUP_PRONOUNS.sortedByDescending { it.length }) q = q.replace(p, focusPerson)
+     // 대명사 치환이 없었으면(생략형 후속) 이름을 앞에 붙여 focus 인물로 검색되게 한다.
+     return if (q != question) q else "$focusPerson $question"
+ }
+diff --git a/app/src/main/java/com/example/hjp/agent/AgentSession.kt b/app/src/main/java/com/example/hjp/agent/AgentSession.kt
+index e6d2b68..6ad3991 100644
+--- a/app/src/main/java/com/example/hjp/agent/AgentSession.kt
++++ b/app/src/main/java/com/example/hjp/agent/AgentSession.kt
+@@ -209,6 +209,9 @@ class AgentSession {
+ 
+         /** tool_session_context 키 — 검색 tool 이 저장하는 값. */
+         const val KEY_FOCUS_PERSON = "focus_person"
++
++        /** 현재 인물이 소속된 회사 — 회사 엔티티를 가리키는 후속 질의에 쓴다. */
++        const val KEY_FOCUS_COMPANY = "focus_company"
+         const val KEY_LAST_CARD_IDS = "last_card_ids"
+         const val KEY_LAST_QUERY = "last_query"
+ 
+diff --git a/app/src/test/java/com/example/hjp/MainActivityTest.kt b/app/src/test/java/com/example/hjp/MainActivityTest.kt
+index 8b31c53..16e3656 100644
+--- a/app/src/test/java/com/example/hjp/MainActivityTest.kt
++++ b/app/src/test/java/com/example/hjp/MainActivityTest.kt
+@@ -58,7 +58,10 @@ class MainActivityTest {
+     fun `전체 모두 없이도 총과 몇이 같이 있으면 전체질문으로 본다`() {
+         // "전체 명함이 몇 장이야?" 류 우회가 이 문구는 못 타서 "총 5명"으로 잘못 답했었다
+         // (top-5를 전체로 착각). "총"+"몇" 신호를 추가해서 잡는다(회귀 재발 방지).
+-        listOf("등록된 사람 총 몇 명이야?", "총 몇 명이야?", "등록된 명함 총 몇 개야?")
++        listOf(
++            "등록된 사람 총 몇 명이야?", "총 몇 명이야?", "등록된 명함 총 몇 개야?",
++            "지금 내가 가진 명함 몇개야?", "현재 명함은 몇 장이야?",
++        )
+             .forEach { assertTrue("'$it' 가 전체질문으로 안 잡힘", isUnfilteredListAllQuestion(it)) }
+     }
+ 
+@@ -746,6 +749,26 @@ class MainActivityTest {
+         }
+     }
+ 
++    @Test
++    fun `그 회사의 다른 사람은 회사 엔티티로 푼다`() {
++        assertEquals(
++            "유한회사 앰버 다니는 다른 사람은?",
++            resolveSearchQuery("그 회사 다니는 다른 사람은?", "백다인", "유한회사 앰버"),
++        )
++        assertEquals(
++            "유한회사 앰버 직원 연락처 알려줘",
++            resolveSearchQuery("그 회사 직원 연락처 알려줘", "백다인", "유한회사 앰버"),
++        )
++    }
++
++    @Test
++    fun `그 회사의 속성 질문은 직전 인물 카드에 머문다`() {
++        assertEquals(
++            "백다인 주소는?",
++            resolveSearchQuery("그 회사 주소는?", "백다인", "유한회사 앰버"),
++        )
++    }
++
+     @Test
+     fun `새 인물이나 독립 질문은 건드리지 않는다`() {
+         // 군말 완화가 무관한 질문까지 focus 에 묶으면 안 된다.
+diff --git a/app/src/test/java/com/example/hjp/agent/AgentSessionTest.kt b/app/src/test/java/com/example/hjp/agent/AgentSessionTest.kt
+index 7b50dc0..3de088b 100644
+--- a/app/src/test/java/com/example/hjp/agent/AgentSessionTest.kt
++++ b/app/src/test/java/com/example/hjp/agent/AgentSessionTest.kt
+@@ -212,12 +212,14 @@ class AgentSessionTest {
+         session.beginTurn("t1", "질문")
+         session.recordTurn("t1", "질문", "답변")
+         session.putToolContext(AgentSession.KEY_FOCUS_PERSON, "오동주")
++        session.putToolContext(AgentSession.KEY_FOCUS_COMPANY, "테스트회사")
+ 
+         session.reset()
+ 
+         assertEquals(ConversationMemory(), session.conversationMemory)
+         assertTrue(session.recentMessages.isEmpty())
+         assertNull(session.toolContextValue(AgentSession.KEY_FOCUS_PERSON))
++        assertNull(session.toolContextValue(AgentSession.KEY_FOCUS_COMPANY))
+     }
+ 
+     @Test
+diff --git a/bench/manual_ui/index.html b/bench/manual_ui/index.html
+new file mode 100644
+index 0000000..a25da11
+--- /dev/null
++++ b/bench/manual_ui/index.html
+@@ -0,0 +1,51 @@
++<!doctype html>
++<html lang="ko">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>HJP 하이브리드 수동 점검</title>
++  <style>
++    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
++    body { max-width: 880px; margin: 32px auto; padding: 0 18px 48px; background:#15171a; color:#edf0f4; }
++    h1 { font-size: 22px; margin-bottom: 4px; } .hint { color:#aeb7c2; margin-top:0; }
++    #messages { display:grid; gap:12px; margin:24px 0; } .message { padding:14px; border-radius:12px; background:#22272e; white-space:pre-wrap; }
++    .you { background:#173e62; margin-left:12%; } .meta { color:#aeb7c2; font-size:13px; margin-top:8px; }
++    form { display:flex; gap:8px; position:sticky; bottom:0; padding:14px 0; background:#15171a; } input { flex:1; min-width:0; padding:14px; border:1px solid #47515d; border-radius:9px; background:#22272e; color:inherit; font-size:16px; } button { padding:0 18px; border:0; border-radius:9px; background:#ed764b; color:#171717; font-weight:700; cursor:pointer; }
++    button:disabled { opacity:.55; cursor:wait; } details { margin-top:10px; color:#c7d0da; } pre { overflow:auto; background:#101215; padding:10px; border-radius:8px; font-size:12px; } .cards { display:grid; gap:8px; margin-top:10px; } .card { border-left:3px solid #5aa9e6; padding:8px 10px; background:#1c2228; font-size:14px; }
++  </style>
++</head>
++<body>
++  <h1>명함 검색·멀티턴 수동 점검</h1>
++  <p class="hint">현재 대화 상태를 유지합니다. 예: “백다인씨 회사 알려줘” → “그 회사 다니는 다른 사람은?”</p>
++  <div id="messages" aria-live="polite"></div>
++  <form id="form"><input id="question" autocomplete="off" placeholder="질문을 입력하세요" autofocus><button id="send">보내기</button><button type="button" id="reset">초기화</button></form>
++  <script>
++    const endpoint = 'http://127.0.0.1:8100/chat';
++    let state = {history: [], focus: null, prev_card_ids: [], conversation_memory: null};
++    const messages = document.querySelector('#messages'), input = document.querySelector('#question'), send = document.querySelector('#send');
++    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
++    function add(text, kind, data) {
++      const el = document.createElement('section'); el.className = `message ${kind}`;
++      let html = esc(text);
++      if (data) {
++        const cards = (data.cards || []).map(c => `<div class="card"><strong>${esc(c.name)}</strong> · ${esc(c.company)} · ${esc(c.title)}<br>${esc(c.department)} ${esc(c.phone)} ${esc(c.email)}<br>${esc(c.address)}</div>`).join('');
++        html += cards ? `<div class="cards">${cards}</div>` : '';
++        html += `<details><summary>진단 정보</summary><pre>${esc(JSON.stringify({route:data.route, resolved_query:data.resolved_query, focus:data.focus, abstained:data.abstained, total_matches:data.total_matches, keyword_top:data.keyword_top, semantic_top:data.semantic_top, hybrid_top:data.hybrid_top, gen_ms:data.gen_ms, field_filters:data.field_filters}, null, 2))}</pre></details>`;
++      }
++      el.innerHTML = html; messages.append(el); el.scrollIntoView({behavior:'smooth', block:'end'});
++    }
++    document.querySelector('#form').addEventListener('submit', async e => {
++      e.preventDefault(); const question = input.value.trim(); if (!question) return;
++      add(question, 'you'); input.value=''; send.disabled=true; send.textContent='답변 중…';
++      try {
++        const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, ...state})});
++        const data = await response.json(); if (!response.ok) throw new Error(data.error || response.statusText);
++        state = {history:data.history || [], focus:data.focus || null, prev_card_ids:data.card_ids || [], conversation_memory:data.conversation_memory || null};
++        add(data.answer || data.error || '응답이 비었습니다.', 'bot', data);
++      } catch (err) { add(`연결 실패: ${err.message}`, 'bot'); }
++      finally { send.disabled=false; send.textContent='보내기'; input.focus(); }
++    });
++    document.querySelector('#reset').onclick = () => { state = {history: [], focus: null, prev_card_ids: [], conversation_memory: null}; messages.replaceChildren(); input.focus(); };
++  </script>
++</body>
++</html>
+diff --git a/scripts/hybrid_server.py b/scripts/hybrid_server.py
+index de54d86..19ff9a3 100644
+--- a/scripts/hybrid_server.py
++++ b/scripts/hybrid_server.py
+@@ -35,6 +35,9 @@ RAG_FIELDS = ["name", "company", "title", "department", "industry", "location",
+ # 앱 MainActivity.kt 의 대명사/생략형 후속 처리 포팅
+ PRONOUNS = ["그 사람의", "그 사람", "그사람", "그 분", "그분", "이 사람", "이사람", "저 사람", "저사람",
+             "걔", "그 회사", "그회사", "방금 그", "그 명함", "이 분", "이분"]
++COMPANY_ENTITY_FOLLOWUP_RE = re.compile(
++    r"그\s*회사(?:에)?\s*(?:다니|근무|재직|일하)|그\s*회사(?:의)?\s*(?:사람|직원|동료)"
++)
+ ATTRIBUTE_NOUNS = ["전화번호", "전화", "번호", "연락처", "핸드폰", "휴대폰", "메일", "이메일",
+                    "직급", "직함", "직책", "회사", "소속", "주소", "위치", "지역", "부서", "이름"]
+ 
+@@ -157,6 +160,7 @@ CAPABILITY_ANSWER = (
+ GENERIC_LIST_STRIP_WORDS = (
+     # 긴 것부터 — "내가 가진"이 "내"보다 먼저 걷혀야 한다.
+     "가지고 있어", "가지고 있는", "가지고있는", "내가 가진", "가진", "가지고",
++    "지금", "현재",
+     "저장된", "등록된", "있는", "있어", "있나", "있지",
+     "보여줘", "알려줘", "찾아줘", "리스트", "목록", "전체", "명함", "이름",
+     "카드", "사람", "모두", "전부", "얼마나", "몇", "장수", "개수", "장", "명", "총", "개",
+@@ -1119,7 +1123,7 @@ def empty_field_answer(question: str, card_ids):
+ ELLIPSIS_LEAD_FILLERS = ("어느", "어떤", "그럼", "그러면", "근데", "그리고", "혹시", "이제", "또")
+ 
+ 
+-def resolve_query(question: str, focus):
++def resolve_query(question: str, focus, focus_company=None):
+     if not focus:
+         return question, False
+     trimmed = question.lstrip()
+@@ -1145,7 +1149,9 @@ def resolve_query(question: str, focus):
+     if not has_pron and not is_ellip:
+         return question, False
+     q = question
+-    for p in PRONOUNS:
++    if focus_company and COMPANY_ENTITY_FOLLOWUP_RE.search(question):
++        q = re.sub(r"그\s*회사", focus_company, q)
++    for p in sorted(PRONOUNS, key=len, reverse=True):
+         q = q.replace(p, focus)
+     if q == question:
+         q = focus + " " + question
+@@ -1621,7 +1627,14 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
+             route="context_answer",
+         )
+ 
+-    rq, changed = (question, False) if no_rewrite else resolve_query(question, focus)
++    focus_company = next(
++        ((CARDS_BY_ID.get(cid) or {}).get("company") for cid in (prev_card_ids or [])
++         if (CARDS_BY_ID.get(cid) or {}).get("name") == focus
++         and (CARDS_BY_ID.get(cid) or {}).get("company")),
++        None,
++    )
++    rq, changed = ((question, False) if no_rewrite
++                   else resolve_query(question, focus, focus_company))
+ 
+     t0 = time.time()
+     kw = keyword_ranking_fts(rq)  # 저쪽(검색 담당) FTS4 티어드 방식
