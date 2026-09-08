@@ -29,6 +29,16 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
 
     private val titles = HashSet<String>()
     private val companies = HashSet<String>()
+
+    /**
+     * 회사 **핵심어** 어휘. [companies]는 회사명 전체 문자열이라("유한회사 앰버")
+     * 질의 토큰 하나로는 절대 안 맞는다 — 그래서 질의에 회사를 댔는데도 조건이 안 걸렸다.
+     * 실측: "샤인기계 백다인씨 직급"이 백다인 두 장을 다 가져왔고, 몇 턴 뒤
+     * "백다인씨 전화번호"가 엉뚱한 쪽을 답했다(통합 벤치 v1.3 실패 3건이 전부 이 모양).
+     * 법인 표기(주식회사·유한회사)는 197·160장이 공유하므로 뺀다 — 넣으면 그게
+     * 필터가 되어 357장이 한 덩어리가 된다.
+     */
+    private val companyTerms = HashSet<String>()
     private val names = HashSet<String>()
 
     /**
@@ -91,7 +101,13 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
             }
 
             val comp = card.company.orEmpty().trim()
-            if (comp.isNotBlank()) companies.add(KeywordSearchRanker.normalize(comp))
+            if (comp.isNotBlank()) {
+                val normalizedCompany = KeywordSearchRanker.normalize(comp)
+                companies.add(normalizedCompany)
+                normalizedCompany.split(" ")
+                    .filter { it.length >= 2 && it !in COMPANY_STOPWORDS }
+                    .forEach { companyTerms.add(it) }
+            }
 
             val nm = card.name.orEmpty().trim()
             if (nm.isNotBlank()) names.add(KeywordSearchRanker.normalize(nm))
@@ -156,6 +172,12 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
         if (NAME_HONORIFICS.any { token.endsWith(it) }) token.dropLast(1) else token
 
     fun isKnownAddressTerm(token: String): Boolean = token in addressTerms
+
+    fun isKnownCompanyTerm(token: String): Boolean = token in companyTerms
+
+    /** 정규화된 질의 안에 통째로 들어 있는 회사명들. [cores] 중 하나를 포함하는 것만 본다. */
+    fun companiesContainedIn(normalizedQuery: String, cores: Set<String>): List<String> =
+        companies.filter { c -> c in normalizedQuery && cores.any { it in c.split(" ") } }
 
     fun isKnownName(token: String): Boolean = token in names
 
@@ -228,17 +250,26 @@ class CardGazetteer(cards: List<BusinessCardEntity>) {
 }
 
 /** 질의에서 뽑아낸 필드 조건. 비어 있으면 필터를 걸지 않는다. */
+/**
+ * 법인 표기. normalize가 괄호를 지우므로 "(주)"는 "주", "(유)"는 "유"가 되는데 둘 다
+ * 한 글자라 길이 조건에서 이미 걸러진다. 여기 남기는 것은 두 글자 이상인 것들이다.
+ */
+private val COMPANY_STOPWORDS = setOf("주식회사", "유한회사")
+
 data class FieldFilters(
     val names: List<String> = emptyList(),
     val locations: List<String> = emptyList(),
     val titles: List<String> = emptyList(),
+    val companies: List<String> = emptyList(),
 ) {
-    val isEmpty: Boolean get() = names.isEmpty() && locations.isEmpty() && titles.isEmpty()
+    val isEmpty: Boolean
+        get() = names.isEmpty() && locations.isEmpty() && titles.isEmpty() && companies.isEmpty()
 
     override fun toString(): String = buildList {
         if (names.isNotEmpty()) add("이름=${names.joinToString(",")}")
         if (locations.isNotEmpty()) add("지역=${locations.joinToString(",")}")
         if (titles.isNotEmpty()) add("직함=${titles.joinToString(",")}")
+        if (companies.isNotEmpty()) add("회사=${companies.joinToString(",")}")
     }.joinToString(" ")
 }
 
@@ -279,7 +310,25 @@ fun extractFieldFilters(analyzed: AnalyzedSearchQuery, gazetteer: CardGazetteer?
         }
         if (gazetteer.isKnownAddressTerm(token)) locs.add(token)
     }
-    return FieldFilters(names.sorted(), locs.sorted(), titles.sorted())
+    // 회사는 마지막이다. 이름/직함/지역이 먼저 가져간 토큰은 건드리지 않는다 — 회사
+    // 핵심어가 사람 이름이나 지역과 겹칠 수 있고, 그때 우선순위를 뒤집으면 이름 검색이
+    // 깨진다. 파이썬 쪽(extract_field_filters)과 같은 순서를 유지할 것.
+    val comps = LinkedHashSet<String>()
+    for (token in analyzed.keywordTokens) {
+        if (token in names || token in titles || token in locs) continue
+        if (gazetteer.isKnownCompanyTerm(token)) comps.add(token)
+    }
+    // **법인 표기까지 댔으면 그걸 살린다.** 핵심어만 쓰면 "유한회사 경기전자"와
+    // "주식회사 경기전자"가 한 덩어리가 되는데 데이터에서 이 둘은 다른 회사다
+    // (핵심어가 겹치는 조합이 41조 있다). 질의에 회사명 전체가 통째로 들어 있으면
+    // 그 전체를 조건으로 삼고, 아니면 핵심어로 남긴다 — "경기전자 사람"은 사용자가
+    // 안 가렸으므로 우리도 가리지 않는다.
+    val companyFilter = if (comps.isEmpty()) emptyList() else {
+        val normalizedQuery = analyzed.normalized
+        val exact = gazetteer.companiesContainedIn(normalizedQuery, comps)
+        if (exact.isNotEmpty()) exact.sorted() else comps.sorted()
+    }
+    return FieldFilters(names.sorted(), locs.sorted(), titles.sorted(), companyFilter)
 }
 
 /** 필터 조건을 모두(AND) 만족하는 카드만 남긴다. 필터가 없으면 원본 그대로. */
@@ -354,7 +403,14 @@ private fun matchFieldFilters(
     // 순정보다 나빠서 되돌렸다. 데이터 표기를 정규화하는 쪽이 맞는 해법이다.
     val titleWords = KeywordSearchRanker.normalize(card.title.orEmpty()).split(" ")
     val titleOk = filters.titles.isEmpty() || filters.titles.any { it in titleWords }
-    nameOk && locOk && titleOk
+    // 회사도 단어 단위다. 부분 문자열이면 "대성전자"가 "대성"에 걸린다.
+    // 두 가지를 받는다: 회사명 **전체**("유한회사 경기전자")면 통째로 일치해야 하고,
+    // 핵심어("경기전자")면 단어 단위로 맞춘다. 부분 문자열이면 "대성전자"가 "대성"에 걸린다.
+    val companyWhole = KeywordSearchRanker.normalize(card.company.orEmpty())
+    val companyWords = companyWhole.split(" ")
+    val companyOk = filters.companies.isEmpty() ||
+        filters.companies.any { it == companyWhole || it in companyWords }
+    nameOk && locOk && titleOk && companyOk
 }
 
 /**

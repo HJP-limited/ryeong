@@ -324,6 +324,64 @@ class MainActivityTest {
      * 각 카드에 서로 다른 회사/주소/전화를 준다 — 필드 기반 매칭을 검증할 수 있게.
      * 회사·주소는 이름을 포함하지 않는다(이름 매칭과 필드 매칭을 분리해서 보려고).
      */
+    // ---- 동명이인 되부르기 ----
+
+    // 동명이인 시험용 카드 — 8/26 본의 `cardOf` 는 id·이름을 받지 않아 직접 만든다.
+    private fun twinCard(id: String, name: String, company: String) =
+        BusinessCardEntity(
+            id, name, "", company, "", "", "", "", "", "", "", "", "", 0L,
+        )
+
+    private fun twinResponse(names: List<String>) = CardSearchResponse(
+        query = "q", engine = "test", retrieval = "keyword",
+        keywordQuery = "q", semanticQuery = "q",
+        fieldFilters = FieldFilters(names = listOf("백다인")),
+        results = listOf(
+            CardSearchHit(twinCard("c1", "백다인", "샤인기계"), 1.0, 0, null, 0f),
+            CardSearchHit(twinCard("c2", "백다인", "앰버"), 0.9, 1, null, 0f),
+        ).filter { it.card.id in names },
+    )
+
+    @Test
+    fun `앞에서 정해 둔 동명이인만 남긴다`() {
+        // 회사로 한 명을 특정한 뒤 몇 턴 지나 이름만으로 다시 부르는 경우다. focus 도
+        // 직전 카드 id 도 그새 방해 인물로 덮여서, 이 기억이 없으면 어느 쪽인지 모른다
+        // (통합 벤치 v1.3 실패 3건이 전부 이 모양이었고 되묻지도 않고 틀린 값을 줬다).
+        val search = twinResponse(listOf("c1", "c2"))
+        val pinned = pinAmbiguousTwin(search, "백다인=c2")
+        assertEquals(listOf("c2"), pinned.results.map { it.card.id })
+    }
+
+    @Test
+    fun `정해 둔 적이 없으면 후보를 그대로 둔다`() {
+        // 애매한 채로 지나간 대화를 확신으로 둔갑시키지 않는다.
+        val search = twinResponse(listOf("c1", "c2"))
+        assertEquals(listOf("c1", "c2"), pinAmbiguousTwin(search, null).results.map { it.card.id })
+        assertEquals(listOf("c1", "c2"),
+            pinAmbiguousTwin(search, "신민재=c9").results.map { it.card.id })
+    }
+
+    @Test
+    fun `후보가 한 장뿐이면 건드리지 않는다`() {
+        val search = twinResponse(listOf("c1"))
+        assertEquals(listOf("c1"), pinAmbiguousTwin(search, "백다인=c2").results.map { it.card.id })
+    }
+
+    @Test
+    fun `기억은 같은 이름이 다시 확정되면 최신으로 덮는다`() {
+        // 대화 중에 사용자가 다른 쪽으로 옮겨갈 수 있고, 그때는 최근 확정이 맞다.
+        val once = appendSubjectCard(null, "백다인", "c1")
+        assertEquals("백다인=c1", once)
+        val twice = appendSubjectCard(once, "백다인", "c2")
+        assertEquals("백다인=c2", twice)
+        val other = appendSubjectCard(twice, "신민재", "c9")
+        assertEquals("백다인=c2,신민재=c9", other)
+        assertEquals("c2", subjectCardFor(other, "백다인"))
+        assertEquals("c9", subjectCardFor(other, "신민재"))
+        assertNull(subjectCardFor(other, "남다은"))
+        assertNull(subjectCardFor(null, "백다인"))
+    }
+
     private fun sampleSearchResponse(names: List<String>): CardSearchResponse {
         val hits = names.mapIndexed { i, name ->
             CardSearchHit(
@@ -499,6 +557,19 @@ class MainActivityTest {
     }
 
     // ---- 대상 정정("A가 아니라 B야") ----
+
+    @Test
+    fun `정정에서 대상이 앞에 와도 버릴 이름을 고르지 않는다`() {
+        val names = listOf("구예원", "예하린")
+        // 실측(통합 벤치 v1): 대상 선행 어순에서 버릴 이름(예하린)을 골라 '예하린 예하린씨 말고' 가 됐다.
+        val fixed = resolveCorrection("구예원씨 직급 말한 거야. 예하린씨 말고", names)
+        assertTrue(fixed, fixed.startsWith("구예원"))
+        assertFalse(fixed, fixed.contains("예하린"))
+        // 기존 어순(버릴 이름이 앞)은 그대로 동작해야 한다.
+        val legacy = resolveCorrection("아니 예하린씨 말고 구예원씨 직급 알려줘", names)
+        assertTrue(legacy, legacy.startsWith("구예원"))
+        assertFalse(legacy, legacy.contains("예하린"))
+    }
 
     @Test
     fun `정정하면 뒤에 말한 사람으로 바뀐다`() {

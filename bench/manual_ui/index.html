@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HJP 하이브리드 수동 점검</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { max-width: 880px; margin: 32px auto; padding: 0 18px 48px; background:#15171a; color:#edf0f4; }
+    h1 { font-size: 22px; margin-bottom: 4px; } .hint { color:#aeb7c2; margin-top:0; }
+    #messages { display:grid; gap:12px; margin:24px 0; } .message { padding:14px; border-radius:12px; background:#22272e; white-space:pre-wrap; }
+    .you { background:#173e62; margin-left:12%; } .meta { color:#aeb7c2; font-size:13px; margin-top:8px; }
+    form { display:flex; gap:8px; position:sticky; bottom:0; padding:14px 0; background:#15171a; } input { flex:1; min-width:0; padding:14px; border:1px solid #47515d; border-radius:9px; background:#22272e; color:inherit; font-size:16px; } button { padding:0 18px; border:0; border-radius:9px; background:#ed764b; color:#171717; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.55; cursor:wait; } details { margin-top:10px; color:#c7d0da; } pre { overflow:auto; background:#101215; padding:10px; border-radius:8px; font-size:12px; } .cards { display:grid; gap:8px; margin-top:10px; } .card { border-left:3px solid #5aa9e6; padding:8px 10px; background:#1c2228; font-size:14px; }
+  </style>
+</head>
+<body>
+  <h1>명함 검색·멀티턴 수동 점검</h1>
+  <p class="hint">현재 대화 상태를 유지합니다. 예: “백다인씨 회사 알려줘” → “그 회사 다니는 다른 사람은?”</p>
+  <div id="messages" aria-live="polite"></div>
+  <form id="form"><input id="question" autocomplete="off" placeholder="질문을 입력하세요" autofocus><button id="send">보내기</button><button type="button" id="reset">초기화</button></form>
+  <script>
+    const endpoint = 'http://127.0.0.1:8100/chat';
+    let state = {history: [], focus: null, prev_card_ids: [], conversation_memory: null};
+    const messages = document.querySelector('#messages'), input = document.querySelector('#question'), send = document.querySelector('#send');
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    function add(text, kind, data) {
+      const el = document.createElement('section'); el.className = `message ${kind}`;
+      let html = esc(text);
+      if (data) {
+        const cards = (data.cards || []).map(c => `<div class="card"><strong>${esc(c.name)}</strong> · ${esc(c.company)} · ${esc(c.title)}<br>${esc(c.department)} ${esc(c.phone)} ${esc(c.email)}<br>${esc(c.address)}</div>`).join('');
+        html += cards ? `<div class="cards">${cards}</div>` : '';
+        html += `<details><summary>진단 정보</summary><pre>${esc(JSON.stringify({route:data.route, resolved_query:data.resolved_query, focus:data.focus, abstained:data.abstained, total_matches:data.total_matches, keyword_top:data.keyword_top, semantic_top:data.semantic_top, hybrid_top:data.hybrid_top, gen_ms:data.gen_ms, field_filters:data.field_filters}, null, 2))}</pre></details>`;
+      }
+      el.innerHTML = html; messages.append(el); el.scrollIntoView({behavior:'smooth', block:'end'});
+    }
+    document.querySelector('#form').addEventListener('submit', async e => {
+      e.preventDefault(); const question = input.value.trim(); if (!question) return;
+      add(question, 'you'); input.value=''; send.disabled=true; send.textContent='답변 중…';
+      try {
+        const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question, ...state})});
+        const data = await response.json(); if (!response.ok) throw new Error(data.error || response.statusText);
+        state = {history:data.history || [], focus:data.focus || null, prev_card_ids:data.card_ids || [], conversation_memory:data.conversation_memory || null};
+        add(data.answer || data.error || '응답이 비었습니다.', 'bot', data);
+      } catch (err) { add(`연결 실패: ${err.message}`, 'bot'); }
+      finally { send.disabled=false; send.textContent='보내기'; input.focus(); }
+    });
+    document.querySelector('#reset').onclick = () => { state = {history: [], focus: null, prev_card_ids: [], conversation_memory: null}; messages.replaceChildren(); input.focus(); };
+  </script>
+</body>
+</html>

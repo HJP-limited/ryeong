@@ -424,7 +424,8 @@ def format_recent_conversation(recent_pairs) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def finalize_turn(memory, turn_id, now_ms, question, answer, executed_tools, history):
+def finalize_turn(memory, turn_id, now_ms, question, answer, executed_tools, history,
+                  card_ids=None):
     """
     턴을 마무리한다. Kotlin AgentSession.recordTurn 과 동일하게, 질문이나 답변이 비어
     있으면(생성 실패 등) 아무것도 갱신하지 않는다 — begin_turn 이 걸어둔 pending 항목이
@@ -774,7 +775,12 @@ def resolve_correction(question: str, gazetteer):
         return question
     # 질의에 나타난 **위치** 순으로 본다(추출 순서가 아니라).
     ordered = sorted(names, key=lambda n: question.find(n))
-    target = ordered[-1]
+    # 거절 표지 바로 앞의 이름이 **버릴** 이름이다. "X씨 직급 말한 거야. Y씨 말고" 에서
+    # 마지막 이름(Y)을 대상으로 잡으면 뒤집힌다(통합 벤치 v1 기준선 2/2 실패).
+    rejected = {n for n in names
+                if re.search(re.escape(n) + r"(?:씨|님)?(?:가|이|은|는)?\s*(?:말고|아니라|아니고)", question)}
+    kept = [n for n in ordered if n not in rejected]
+    target = kept[-1] if kept and rejected else ordered[-1]
     # 정정 뒤의 실제 요청만 남긴다. 마지막 문장이 그 요청이다.
     tail = question
     for sep in (".", "!", "?"):
@@ -782,7 +788,9 @@ def resolve_correction(question: str, gazetteer):
         if len(parts) > 1:
             tail = parts[-1]
     # 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
-    for n in ordered[:-1]:
+    for n in ordered:
+        if n == target:          # 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다
+            continue
         tail = tail.replace(n + "씨", " ").replace(n, " ")
     for p in PRONOUNS:
         tail = tail.replace(p, " ")
@@ -1484,6 +1492,20 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
     abstained = ev.should_abstain(rq, kw_scored_for_gate, sims, GAZETTEER)
     if abstained:
         hy = []
+    # **동명이인 되부르기.** 이름 조건이 하나인데 그 이름 카드가 여럿 남았고, 이 대화가
+    # 앞에서 한 명으로 정해 둔 적이 있으면 그쪽만 남긴다. 사람은 한 번 정하면 다음부터
+    # 이름만 댄다("샤인기계 백다인씨 직급" ... 세 턴 뒤 "백다인씨 전화번호는?").
+    #
+    # 규칙을 프롬프트에 적지 않고 여기서 결정적으로 거른다 — 프롬프트 규칙 추가는
+    # 이 저장소에서 4전 4패고, 결정적 우회는 9전 9승이다.
+    pinned = (memory.get("subject_cards") or {}).get(
+        (field_filters.get("name") or [None])[0])
+    if pinned and len(field_filters.get("name") or []) == 1:
+        same_name = [cid for cid in hy
+                     if CARDS_BY_ID[cid]["name"] == CARDS_BY_ID[pinned]["name"]]
+        if len(same_name) > 1 and pinned in same_name:
+            hy = [cid for cid in hy if cid == pinned or cid not in same_name]
+
     top_ids = hy[:TOP_N]
     # faithfulness 채점용 — LLM 이 **실제로 본** 카드. narrow_by_answer 가 top_ids 를
     # 깎기 전에 잡아 둔다. 답변이 narrow 로 지워진 카드 값을 썼어도 그건 컨텍스트 안이다.
@@ -1548,7 +1570,8 @@ def run_turn(question, history, focus, prev_card_ids=None, conversation_memory=N
             answer, err = "", f"{type(e).__name__}: {e}"
     gen_ms = (time.time() - t2) * 1000
     # 검색은(기권이어도) 실제로 실행됐다 — 후속 재사용 턴만 도구 실행이 없다.
-    memory, recent = finalize_turn(memory, turn_id, now_ms, question, answer, ["search_business_cards"], history)
+    memory, recent = finalize_turn(memory, turn_id, now_ms, question, answer,
+                                   ["search_business_cards"], history, card_ids=top_ids)
 
     # LLM 판정을 카드 목록에도 반영한다.
     # 검색은 top-N 을 채우느라 무관한 후보를 함께 담는데(점수 컷오프로는 못 자른다는 것을

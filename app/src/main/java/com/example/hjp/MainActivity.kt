@@ -441,6 +441,18 @@ private fun ChatScreen(
                         ids.joinToString(",").ifBlank { null },
                     )
                     session.putToolContext(AgentSession.KEY_LAST_QUERY, question)
+                    // 이름이 한 장으로 좁혀졌으면 그 짝을 기억한다(동명이인 되부르기).
+                    // 회사로 특정한 턴("샤인기계 백다인씨")이 여기 해당한다.
+                    val only = result.search?.results?.singleOrNull()?.card
+                    if (only != null && question.contains(only.name.orEmpty())) {
+                        session.putToolContext(
+                            AgentSession.KEY_SUBJECT_CARDS,
+                            appendSubjectCard(
+                                session.toolContextValue(AgentSession.KEY_SUBJECT_CARDS),
+                                only.name.orEmpty(), only.id,
+                            ),
+                        )
+                    }
                 }
                 // 이번 턴이 물어본 속성을 남겨 둔다 — 다음 턴이 "○○씨는?" 처럼
                 // 속성을 생략하면 여기서 이어받는다. 속성이 없는 질문이면
@@ -1382,7 +1394,10 @@ private fun runChat(
     val searchQuery = resolveSearchQuery(question, focusPerson)
 
     val search = try {
-        searchService.searchHybrid(searchQuery, 5)
+        pinAmbiguousTwin(
+            searchService.searchHybrid(searchQuery, 5),
+            session.toolContextValue(AgentSession.KEY_SUBJECT_CARDS),
+        )
     } catch (e: Throwable) {
         return ChatResult("검색 중 문제가 있었습니다.", null, error = e.message ?: e.javaClass.simpleName)
     }
@@ -1486,6 +1501,44 @@ private fun cardReferencedIn(card: BusinessCardEntity, answer: String): Boolean 
  * 원본을 유지한다(이름이 없다고 해서 후보가 무관한 건 아니므로). 이름도 없고 집계형
  * 형식도 아니면 명함과 무관한 답변이므로 카드를 비운다.
  */
+/**
+ * "이름=id" 목록에 한 줄을 넣거나 갱신한다. 같은 이름이 다시 확정되면 최신 것으로 덮는다 —
+ * 사용자가 대화 중에 다른 쪽으로 옮겨갈 수 있고, 그때는 최근 확정이 맞다.
+ */
+internal fun appendSubjectCard(existing: String?, name: String, cardId: String): String {
+    if (name.isBlank() || cardId.isBlank()) return existing.orEmpty()
+    val kept = existing.orEmpty().split(",")
+        .filter { it.isNotBlank() && it.substringBefore("=") != name }
+    return (kept + "$name=$cardId").joinToString(",")
+}
+
+/** "이름=id" 목록에서 그 이름에 대해 이 대화가 정한 카드 id 를 찾는다. */
+internal fun subjectCardFor(existing: String?, name: String): String? =
+    existing.orEmpty().split(",")
+        .firstOrNull { it.substringBefore("=") == name && "=" in it }
+        ?.substringAfter("=")
+        ?.takeIf { it.isNotBlank() }
+
+/**
+ * **동명이인 되부르기.** 이름 조건이 하나인데 그 이름 카드가 여럿 남았고, 이 대화가
+ * 앞에서 한 명으로 정해 둔 적이 있으면 그쪽만 남긴다. 사람은 한 번 정하면 다음부터
+ * 이름만 댄다("샤인기계 백다인씨 직급" ... 세 턴 뒤 "백다인씨 전화번호는?").
+ *
+ * 규칙을 프롬프트에 적지 않고 여기서 결정적으로 거른다 — 이 저장소에서 프롬프트 규칙
+ * 추가는 4전 4패, 결정적 우회는 9전 9승이다.
+ */
+internal fun pinAmbiguousTwin(
+    search: CardSearchResponse,
+    subjectCards: String?,
+): CardSearchResponse {
+    if (search.fieldFilters.names.size != 1) return search
+    val pinnedId = subjectCardFor(subjectCards, search.fieldFilters.names.first()) ?: return search
+    val pinned = search.results.firstOrNull { it.card.id == pinnedId } ?: return search
+    val sameName = search.results.filter { it.card.name == pinned.card.name }
+    if (sameName.size <= 1) return search
+    return search.copy(results = search.results.filter { it.card.id == pinnedId || it !in sameName })
+}
+
 internal fun narrowByAnswer(
     search: CardSearchResponse,
     answer: String,
@@ -1699,7 +1752,13 @@ internal fun resolveCorrection(question: String, knownNames: List<String>): Stri
     if (knownNames.size < 2) return question
     // 추출 순서가 아니라 **발화에 나타난 위치** 순으로 본다.
     val ordered = knownNames.sortedBy { question.indexOf(it) }
-    val target = ordered.last()
+    // 거절 표지 바로 앞의 이름이 **버릴** 이름이다. "X씨 직급 말한 거야. Y씨 말고" 에서
+    // 마지막 이름(Y)을 대상으로 잡으면 뒤집힌다(통합 벤치 v1 기준선 2/2 실패).
+    val rejected = knownNames.filter { n ->
+        Regex(Regex.escape(n) + "(?:씨|님)?(?:가|이|은|는)?\\s*(?:말고|아니라|아니고)").containsMatchIn(question)
+    }.toSet()
+    val kept = ordered.filterNot { it in rejected }
+    val target = if (kept.isNotEmpty() && rejected.isNotEmpty()) kept.last() else ordered.last()
     // 정정 뒤의 실제 요청만 남긴다 — 마지막 문장이 그 요청이다.
     var tail = question
     for (sep in listOf(".", "!", "?")) {
@@ -1707,7 +1766,8 @@ internal fun resolveCorrection(question: String, knownNames: List<String>): Stri
         if (parts.size > 1) tail = parts.last()
     }
     // 옛 이름과 대명사를 지운다 — 남으면 다시 이름 조건으로 잡히거나 focus 로 치환된다.
-    for (n in ordered.dropLast(1)) tail = tail.replace("${n}씨", " ").replace(n, " ")
+    // 위치가 아니라 **대상 여부**로 지운다 — 대상이 앞에 올 수 있다.
+    for (n in ordered) if (n != target) tail = tail.replace("${n}씨", " ").replace(n, " ")
     for (p in FOLLOWUP_PRONOUNS) tail = tail.replace(p, " ")
     tail = tail.replace(Regex("\\s+"), " ").trim()
     return "$target $tail".trim()
